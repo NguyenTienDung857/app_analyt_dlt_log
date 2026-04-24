@@ -1,0 +1,183 @@
+1. Mở file
+      - Bấm Open DLT
+      - Kéo thả file .dlt, .log, .bin
+      - Chọn nhiều file cùng lúc
+  2. Parse DLT
+      - Hiển thị progress khi đọc file
+      - Hiển thị số message đã load
+      - Hiển thị tên file, dung lượng, thời gian parse
+      - Báo lỗi nếu file không parse được
+  3. Dashboard thống kê
+      - Tổng số message
+      - Số message sau filter
+      - Số error/fatal
+      - Số warning
+      - Số ECU
+      - Time span của log
+  4. Timeline
+      - Biểu đồ phân bố message theo thời gian
+      - Màu khác nhau cho error/warning/normal
+      - Có hiển thị rõ thời gian timerline để biết là vào khoảng thời gian 
+  5. Distribution
+      - Thống kê message theo level:
+          - Fatal
+          - Error
+          - Warn
+          - Info
+          - Debug
+          - Verbose
+          - Trace
+          - Control
+          - Unknown
+  6. Search
+      - Tìm trong payload
+      - Tìm theo ECU/APID/CTID/type/level/file
+      - Bật/tắt Case
+      - Bật/tắt Regex
+      - Highlight kết quả search trong payload
+  7. Filter
+
+      - Lọc theo khoảng thời gian From / To
+      - Reset filter
+  8. Bảng log
+      - Phân trang full/100/250/500/1000 dòng, mặc định khi vào là hiện full dòng 
+      - Next/previous page
+      - Chế độ compact/comfortable
+      - Hiển thị:
+          - index
+          - time
+          - delta ms
+          - level
+          - type
+          - ECU
+          - APID
+          - CTID
+          - payload
+          - length
+  9. Bookmark
+      - Bấm dấu sao trên từng dòng để mark
+      - Bật Marked để chỉ xem các dòng đã mark
+  10. Chi tiết message
+
+  - Click một dòng để xem detail
+  - Xem file nguồn, timestamp, delta, ECU/APID/CTID
+  - Xem type/subtype, session, counter, offset
+  - Xem payload đầy đủ
+  - Xem raw payload hex/ascii
+
+  11. Copy
+
+  - Copy payload
+  - Copy toàn bộ detail message dạng JSON
+  - thêm chức năng chọn copy tất cả message từ khoảng thời gian A đến khoảng thời gian B
+  12. Export
+
+  - Export kết quả đang filter ra CSV
+  - Export kết quả đang filter ra JSON
+
+  13. Keyboard
+
+  - F: focus vào ô search
+  - Arrow Up/Down: chuyển dòng đang chọn
+  - B: bookmark dòng đang chọn
+
+  14. Clear
+
+  - Bấm × góc phải để reset app và load file khác
+
+  Lưu ý: với DLT non-verbose, app hiện hiển thị payload dạng raw hex/ascii. Muốn decode ra text đầy đủ cần thêm mapping FIBEX/ARXML.
+
+15.  Proxy Setup:
+
+
+
+Setup hệ thống gọi API AI đi qua custom proxy (9router) theo cấu hình tôi sẽ cung cấp. Toàn bộ logic gọi AI model (codex5,5) phải được module hóa, dễ dàng config base_url, API Key và headers.
+sk-b089739d3e949acd-ztg3i5-13a62048
+
+https://rsqd56n.9router.com/v1
+ đây là api và địa chỉ web 
+
+
+
+
+16. Data Pipeline cho AI (Giải quyết giới hạn Token):
+
+Không gửi toàn bộ file log. Xây dựng cơ chế trích xuất ngữ cảnh (Context Windowing): Khi người dùng chọn 1 khoảng thời gian A->B hoặc chọn 1 cụm message Error, hệ thống tự động gom (chunk) các log ở mức Info/Trace/Warn trước và sau điểm lỗi đó (vd: +/- 500ms) để làm context gửi cho AI.
+
+Nếu log là non-verbose, hệ thống PHẢI decode payload dựa trên FIBEX/ARXML thành plain text rồi mới gửi vào prompt cho AI. AI không đọc raw hex.
+
+Nhưng mà có những lỗi bị gây ra trong quá trình dài thực hiện tầm vài phút, nên hãy cân nhắc sao cho đầy đủ chính xác tránh bỏ sót 
+
+
+
+17. Tích hợp RAG (Retrieval-Augmented Generation) cho Tài liệu ECU:
+
+Xây dựng một module Vector Database local (vd: ChromaDB hoặc SQLite-vss) để xử lý tài liệu ECU tôi cung cấp.
+
+Khi gửi log cho AI phân tích, hệ thống tự động tìm kiếm (semantic search) các mô tả lỗi, mã DTC, hoặc rule logic tương ứng trong tài liệu ECU để nhét vào System Prompt. Điều này giúp AI có căn cứ chính xác để phân tích lỗi của con Cam ECU này.
+
+
+
+18. AI Output & UI Interaction (Tích hợp sâu vào UI):
+
+AI không chỉ trả về Text thuần túy. Yêu cầu setup cơ chế Structured Output (JSON schema) khi gọi API.
+
+Cấu trúc trả về bắt buộc có: {"summary": "...", "root_cause": "...", "suspicious_message_ids": [102, 105], "recommended_action": "..."}.
+
+Dựa vào mảng suspicious_message_ids mà AI trả về, UI tự động:
+
+Highlight đậm các dòng log đó trong Bảng log (Mục 8).
+
+Đánh dấu cảnh báo trên Timeline (Mục 4).
+
+Tự động đưa vào danh sách Bookmark (Mục 9).
+
+
+
+19. Các chế độ AI Analysis:
+
+On-demand (Manual): Phân tích cụm message người dùng quét chọn.
+
+Auto-scan (Background): Khi load file xong, AI quét nhanh qua các log có level "Error/Fatal", nhóm các lỗi liên tiếp lại và sinh ra một "Báo cáo chẩn đoán tổng thể" hiển thị ngay trên Dashboard (Mục 3).
+
+
+20. Nâng cấp UI/UX và Hiệu năng Renders (Đẹp mắt & Mượt mà):
+
+Cơ chế Rendering: Vì log có thể lên tới hàng triệu dòng, Bảng Log (Mục 8) BẮT BUỘC phải dùng kỹ thuật Virtual Scrolling (Virtualization) hoặc vẽ bằng Canvas/WebGL. Tuyệt đối không render toàn bộ ra DOM để tránh tràn RAM và treo UI.
+
+Minimap Timeline: Bên cạnh thanh scrollbar dọc, tạo một dải "Minimap" (tương tự VS Code) hiển thị màu sắc phân bổ của Error/Warning trên toàn bộ chiều dài file log, giúp người dùng click vào là nhảy ngay đến điểm có lỗi.
+
+Custom Theme & Syntax Highlighting: Giao diện hỗ trợ Dark/Light mode chuẩn kỹ thuật (giống các IDE). Payload text/hex phải được Syntax Highlighting (Tô màu cú pháp) các cặp Byte quan trọng.
+
+
+21. Hiển thị thông tin phân tích nâng cao (Nhiều thông tin hữu ích):
+
+Signal Plotting (Đồ thị tín hiệu): Nếu payload chứa giá trị vật lý của con Cam ECU (như nhiệt độ, điện áp, FPS, tọa độ vật thể), cho phép người dùng click chuột phải vào một Byte/Biến trong payload và chọn "Plot Signal". Ứng dụng sẽ vẽ một biểu đồ đường (Line Chart) mô tả sự thay đổi của giá trị đó theo thời gian.
+
+Session/Ignition Cycle Grouping: Tự động phát hiện các chu kỳ khởi động lại của ECU (reset/ignition cycle) thông qua khoảng trống thời gian (time gap) hoặc các message khởi tạo đặc thù, từ đó chia log thành các "Session" có thể gập/mở (Collapse/Expand).
+
+Log Diffing (So sánh log): Chức năng mở 2 file log song song (Ví dụ: 1 file ECU chạy bình thường, 1 file ECU bị lỗi) để highlight các điểm khác biệt về luồng message giữa 2 file.
+
+22. Tích hợp AI Tầng Sâu Mức Độ Chuyên Gia (Deep AI Agentic Workflows):
+
+Natural Language Search (Tìm kiếm bằng ngôn ngữ tự nhiên): Mở rộng Mục 6. Thay vì chỉ dùng Regex hay Filter cứng, người dùng có thể gõ vào ô search: "Tìm cho tôi những lúc camera bị rớt frame sau khi nhiệt độ vượt quá 80 độ". Dùng AI nội bộ chuyển câu này thành các query/filter phức tạp trên log.
+
+AI-Generated Sequence Diagrams (Biểu đồ tuần tự): Khi người dùng bôi đen một cụm message giao tiếp giữa các module (hoặc giữa Cam ECU với các Node khác), yêu cầu AI Agent sinh ra mã Mermaid.js để vẽ trực tiếp một Biểu đồ tuần tự (Sequence Diagram) ngay trên giao diện, giúp nhìn rõ ai gửi trước, ai nhận sau, timeout ở bước nào.
+
+Diagnostic & UDS Context: Dạy AI nhận diện các bản tin liên quan đến chẩn đoán (Diagnostic/UDS). Nếu AI thấy log báo lỗi, nó phải tự động đối chiếu xem có mã lỗi (DTC - Diagnostic Trouble Code) nào được sinh ra hay không để báo cáo.
+
+Sinh Script Kiểm Thử (Test Script Generation): Sau khi tìm ra nguyên nhân lỗi từ đoạn log (Mục 18), cung cấp một nút bấm "Generate Reproduction Script". Nút này yêu cầu AI viết một đoạn script (Ví dụ: CAPL Script hoặc Python script) để giả lập lại việc gửi chuỗi message đó nhằm tái hiện lỗi trên bàn test.
+
+
+
+23. Tích hợp AI vào Quy trình Phân tích Lỗi (End-to-End AI-Driven Debugging Workflow):
+Khi người dùng phát hiện một lỗi nghiêm trọng (Error/Fatal), họ có thể chọn "Analyze with AI". Hệ thống sẽ tự động:
+- Gom nhóm các message liên quan trong khoảng thời gian +/- time xung quanh lỗi
+
+
+tôi đang cần xây dung một ứng dung để đọc log dlt , log này tôi lấy từ ECU build in cam, mục tiêu đọc log để tìm ra lỗi, và phân tích lỗi đó .Tôi muốn bạn tích hợp AI thật là sâu vào trong phần mềm này, nng dung AI vào để phân tích log, ở chức năng copy message từ khoảng thời gian A đến B thì hãy có chức năng gửi cho AI phân tích, lựa chọn mô hình AI mạnh nhất nhé, codex5,5 đó, tôi sẽ gửi bạn API và web để gửi API vì tôi đang dung qua poxy 9router , các chức năng phân tích có tích hợp AI, mục tiêu hangf đầu là tìm ra lỗi , cứ tìm ra lỗi là thành công 
+tôi sẽ gửi bạn tài lieu của ECU , để bạn gửi cùng log và tài lieu lên cho AI, để AI phân tích cho đúng 
+Mục tiêu hàng đầu là tích hợp AI vào để phân tích tìm ra lỗi nhé, có tích hợp AI phân tích tổng thể, từng message, hoặc cụm message theo thời gian 
+
+
+tôi muốn build thành app desktop, có thể dùng Electron hoặc PyQt, tùy bạn chọn framework nào phù hợp để xây dựng giao diện người dùng đẹp mắt và hiệu quả.

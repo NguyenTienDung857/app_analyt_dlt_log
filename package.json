@@ -1,0 +1,24 @@
+{
+  "name": "nexus-dlt-ai-desktop",
+  "version": "1.0.0",
+  "description": "Desktop DLT log viewer and AI diagnostic workbench for Built-in Cam ECU logs.",
+  "main": "electron-main.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "electron .",
+    "check": "node scripts/smoke-check.js",
+    "syntax": "node --check electron-main.js && node --check preload.js && node --check renderer.js && node --check src/parser/dltParser.js && node --check src/workers/parseWorker.js && node --check src/services/aiClient.js && node --check src/services/contextBuilder.js && node --check src/services/docReader.js && node --check src/services/ragStore.js && node --check src/services/exporter.js"
+  },
+  "keywords": [
+    "dlt",
+    "electron",
+    "ecu",
+    "ai",
+    "diagnostics"
+  ],
+  "author": "",
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "electron": "^41.3.0"
+  }
+}

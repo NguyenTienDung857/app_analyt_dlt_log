@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NEXUS DLT AI Workbench</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app" class="app-shell theme-dark">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">NX</div>
+        <div>
+          <h1>NEXUS DLT AI Workbench</h1>
+          <p>Built-in Cam ECU diagnostics, RAG, and fault-focused AI analysis</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <button id="btn-open" class="btn primary">Open DLT</button>
+        <button id="btn-docs" class="btn">Add ECU Docs</button>
+        <button id="btn-toggle-left" class="btn">Session</button>
+        <button id="btn-toggle-filters" class="btn">Filter</button>
+        <button id="btn-toggle-right" class="btn">Detail</button>
+        <button id="btn-ai-focus" class="btn primary">AI Focus</button>
+        <button id="btn-theme" class="btn">Light</button>
+        <button id="btn-clear" class="btn danger">Reset x</button>
+      </div>
+    </header>
+
+    <section id="drop-zone" class="drop-zone">
+      <div class="drop-card">
+        <div class="drop-orbit"></div>
+        <h2>Drop .dlt, .log, or .bin files here</h2>
+        <p>Multiple files are supported. Logs are parsed in a worker and rendered with virtual scrolling.</p>
+        <button id="btn-open-empty" class="btn primary large">Browse Files</button>
+        <p class="hint">AI context is built from selected time windows and local ECU documentation, not the whole log.</p>
+      </div>
+    </section>
+
+    <main id="workspace" class="workspace hidden">
+      <aside class="left-rail panel">
+        <section class="file-panel">
+          <div class="section-title">Session</div>
+          <div id="file-list" class="file-list"></div>
+          <div id="parse-status" class="parse-status">Idle</div>
+          <div class="progress-track"><div id="parse-progress" class="progress-fill"></div></div>
+        </section>
+
+        <section class="stats-grid">
+          <div class="stat-card"><span>Total</span><strong id="stat-total">0</strong></div>
+          <div class="stat-card"><span>Filtered</span><strong id="stat-filtered">0</strong></div>
+          <div class="stat-card error"><span>Error/Fatal</span><strong id="stat-errors">0</strong></div>
+          <div class="stat-card warn"><span>Warning</span><strong id="stat-warns">0</strong></div>
+          <div class="stat-card"><span>ECU</span><strong id="stat-ecu">0</strong></div>
+          <div class="stat-card"><span>Span</span><strong id="stat-span">-</strong></div>
+        </section>
+
+        <section>
+          <div class="section-title">Level Distribution</div>
+          <div id="distribution" class="distribution"></div>
+        </section>
+
+        <section>
+          <div class="section-title">AI / RAG</div>
+          <div id="docs-status" class="docs-status">Docs: loading</div>
+          <label class="field-label">Base URL</label>
+          <input id="ai-base-url" class="input" spellcheck="false">
+          <label class="field-label">Model</label>
+          <input id="ai-model" class="input" spellcheck="false">
+          <label class="field-label">API Key</label>
+          <input id="ai-key" class="input" type="password" placeholder="Leave blank to keep saved key">
+          <label class="field-label">Extra headers JSON</label>
+          <textarea id="ai-headers" class="textarea small" spellcheck="false">{}</textarea>
+          <div class="inline-fields">
+            <label><input id="ai-auto-scan" type="checkbox"> Auto-scan</label>
+            <label>Window <input id="ai-window" class="mini-input" type="number" min="0" step="100"> ms</label>
+          </div>
+          <button id="btn-save-ai" class="btn full">Save AI Config</button>
+          <button id="btn-auto-ai" class="btn primary full">Run AI Auto Scan</button>
+        </section>
+      </aside>
+
+      <section class="center-stage">
+        <section class="ai-workbench panel">
+          <div class="ai-workbench-head">
+            <div>
+              <div class="section-title">AI Workbench</div>
+              <h2>Trung tâm phân tích lỗi bằng AI</h2>
+              <p id="ai-context-line">Chưa có log. Khi chat, app sẽ gửi context log đang chọn/lọc cùng tài liệu ECU local.</p>
+            </div>
+            <div class="ai-quick-actions">
+              <button id="btn-ai-chat-selection" class="btn">Chat với dòng chọn</button>
+              <button id="btn-ai-chat-filtered" class="btn">Chat với filter hiện tại</button>
+              <button id="btn-ai-chat-errors" class="btn primary">Chat với lỗi nghi ngờ</button>
+            </div>
+          </div>
+
+          <div class="ai-workbench-grid">
+            <div class="ai-chat-panel">
+              <div id="ai-chat-log" class="ai-chat-log">
+                <div class="chat-bubble assistant">
+                  <strong>AI</strong>
+                  <p>Mở log rồi hỏi trực tiếp. Ví dụ: "Phân tích các lỗi camera timeout và chỉ ra message nghi ngờ nhất".</p>
+                </div>
+              </div>
+              <div class="ai-chat-range-row">
+                <label class="chat-range-toggle"><input id="ai-chat-use-range" type="checkbox"> Gửi kèm log theo khoảng thời gian</label>
+                <label>From <input id="ai-chat-from" class="input time-input" placeholder="time, ms hoặc #id"></label>
+                <label>To <input id="ai-chat-to" class="input time-input" placeholder="time, ms hoặc #id"></label>
+                <button id="btn-ai-chat-range-selected" class="btn small" title="Lấy từ Range A/B bên phải">Dùng Range A/B</button>
+                <button id="btn-ai-chat-range-clear" class="btn small">Xoá</button>
+                <span id="ai-chat-range-info" class="chat-range-info"></span>
+              </div>
+              <div class="ai-chat-input-row">
+                <textarea id="ai-chat-input" class="textarea ai-chat-input" placeholder="Chat trực tiếp với AI. App tự gửi kèm context log + system_space.docx..." spellcheck="false"></textarea>
+                <button id="btn-ai-chat-send" class="btn primary">Send</button>
+              </div>
+            </div>
+
+            <div class="ai-report-panel">
+              <div class="section-title">AI Diagnostic Report</div>
+              <div id="ai-status" class="ai-status">Chưa có phân tích AI.</div>
+              <div id="ai-report" class="ai-report"></div>
+            </div>
+          </div>
+        </section>
+
+        <div class="command-strip panel">
+          <div class="search-group">
+            <input id="search-input" class="input search" placeholder="Search payload, ECU/APID/CTID, level, type, file... (F)">
+            <select id="search-field" class="select">
+              <option value="all">All fields</option>
+              <option value="payload">Payload</option>
+              <option value="ecu">ECU</option>
+              <option value="apid">APID</option>
+              <option value="ctid">CTID</option>
+              <option value="level">Level</option>
+              <option value="type">Type</option>
+              <option value="fileName">File</option>
+            </select>
+            <label><input id="case-sensitive" type="checkbox"> Case</label>
+            <label><input id="regex-search" type="checkbox"> Regex</label>
+          </div>
+
+          <div class="filter-row">
+            <input id="natural-query" class="input natural" placeholder="Natural language search, e.g. camera drops FPS after temp > 80">
+            <button id="btn-natural" class="btn">AI Search</button>
+            <select id="page-size" class="select">
+              <option value="all" selected>Full virtual</option>
+              <option value="100">100 rows</option>
+              <option value="250">250 rows</option>
+              <option value="500">500 rows</option>
+              <option value="1000">1000 rows</option>
+            </select>
+            <button id="btn-prev" class="btn">Prev</button>
+            <span id="page-info" class="page-info">Page 1/1</span>
+            <button id="btn-next" class="btn">Next</button>
+          </div>
+
+          <div class="filter-row compact">
+            <label>From <input id="time-from" class="input time-input" placeholder="time or ms"></label>
+            <label>To <input id="time-to" class="input time-input" placeholder="time or ms"></label>
+            <label><input id="marked-only" type="checkbox"> Marked</label>
+            <button id="btn-reset-filter" class="btn">Reset Filter</button>
+            <button id="btn-export-csv" class="btn">Export CSV</button>
+            <button id="btn-export-json" class="btn">Export JSON</button>
+          </div>
+        </div>
+
+        <div class="timeline-panel panel">
+          <canvas id="timeline" height="92"></canvas>
+          <div id="timeline-label" class="timeline-label">Timeline not loaded</div>
+        </div>
+
+        <div class="log-panel panel">
+          <div class="log-header log-grid">
+            <div>Mark</div>
+            <div>#</div>
+            <div>Time</div>
+            <div>Delta</div>
+            <div>Level</div>
+            <div>Type</div>
+            <div>ECU</div>
+            <div>APID</div>
+            <div>CTID</div>
+            <div>Payload</div>
+            <div>Len</div>
+          </div>
+          <div id="virtual-scroll" class="virtual-scroll">
+            <div id="virtual-spacer"></div>
+            <div id="rows-layer" class="rows-layer"></div>
+          </div>
+          <canvas id="minimap" class="minimap" width="18"></canvas>
+        </div>
+      </section>
+
+      <aside class="right-rail panel">
+        <section>
+          <div class="section-title">Message Detail</div>
+          <div id="detail-empty" class="empty-state">Select a row to inspect full payload, raw hex/ascii, and metadata.</div>
+          <div id="detail-panel" class="detail-panel hidden"></div>
+          <div class="button-grid">
+            <button id="btn-copy-payload" class="btn">Copy Payload</button>
+            <button id="btn-copy-detail" class="btn">Copy JSON</button>
+            <button id="btn-bookmark" class="btn">Bookmark</button>
+            <button id="btn-analyze-selected" class="btn primary">Analyze Row</button>
+          </div>
+        </section>
+
+        <section>
+          <div class="section-title">Range Tools</div>
+          <label class="field-label">Range A</label>
+          <input id="range-a" class="input" placeholder="time, ms, or selected id">
+          <label class="field-label">Range B</label>
+          <input id="range-b" class="input" placeholder="time, ms, or selected id">
+          <div class="button-grid">
+            <button id="btn-copy-range" class="btn">Copy A-B</button>
+            <button id="btn-analyze-range" class="btn primary">AI A-B</button>
+            <button id="btn-sequence" class="btn">Sequence</button>
+            <button id="btn-script" class="btn">Test Script</button>
+          </div>
+        </section>
+        <section>
+          <div class="section-title">Signal Plot / Diff</div>
+          <canvas id="signal-chart" class="signal-chart" height="150"></canvas>
+          <button id="btn-plot-signal" class="btn full">Plot First Numeric Signal</button>
+          <div id="diff-panel" class="diff-panel">Open two files to view signature diff.</div>
+        </section>
+      </aside>
+    </main>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
