@@ -6,7 +6,10 @@ const DIAGNOSTIC_SCHEMA = {
   additionalProperties: false,
   required: [
     'summary',
+    'error_verification',
     'root_cause',
+    'impact',
+    'reproduction_steps',
     'suspicious_message_ids',
     'recommended_action',
     'severity',
@@ -18,7 +21,13 @@ const DIAGNOSTIC_SCHEMA = {
   ],
   properties: {
     summary: { type: 'string' },
+    error_verification: { type: 'string' },
     root_cause: { type: 'string' },
+    impact: { type: 'string' },
+    reproduction_steps: {
+      type: 'array',
+      items: { type: 'string' }
+    },
     suspicious_message_ids: {
       type: 'array',
       items: { type: 'integer' }
@@ -139,7 +148,7 @@ class AiClient {
               '',
               'QUAN TRỌNG: Lần trả lời trước chưa đủ dữ liệu. Bây giờ bắt buộc trả JSON object KHÔNG RỖNG.',
               'Mọi chuỗi text phải viết bằng tiếng Việt.',
-              'Bắt buộc có các key: summary, root_cause, suspicious_message_ids, recommended_action, severity, confidence, evidence, dtc_codes, timeline_marks, next_steps.',
+              'Bắt buộc có các key: summary, error_verification, root_cause, impact, reproduction_steps, suspicious_message_ids, recommended_action, severity, confidence, evidence, dtc_codes, timeline_marks, next_steps.',
               'Nếu chưa chắc chắn, hãy nêu giả thuyết kỹ thuật tốt nhất dựa trên log, không được trả câu chung chung.'
             ].join('\n')
           },
@@ -170,18 +179,14 @@ class AiClient {
   }
 
   async chat(payload) {
-    const response = await this.sendChatCompletion({
+    return this.sendChatCompletion({
       model: this.config.model,
       messages: [
         { role: 'system', content: payload.systemPrompt },
         { role: 'user', content: payload.userPrompt }
       ],
       temperature: 0.2
-    });
-    if (typeof response === 'string') {
-      return response;
-    }
-    return JSON.stringify(response, null, 2);
+    }, { parseJson: false });
   }
 
   async completeStructured(payload, schema, schemaName) {
@@ -227,7 +232,7 @@ class AiClient {
     }
   }
 
-  async sendChatCompletion(body) {
+  async sendChatCompletion(body, options = {}) {
     const url = joinUrl(this.config.baseUrl, '/chat/completions');
     const headers = {
       'Content-Type': 'application/json',
@@ -236,6 +241,12 @@ class AiClient {
     };
     const response = await postJson(url, body, headers);
     const content = extractContent(response);
+    if (options.parseJson === false) {
+      if (!String(content || '').trim()) {
+        throw new Error('AI response was empty.');
+      }
+      return content;
+    }
     const parsed = parseJsonContent(content);
     return parsed;
   }
@@ -356,7 +367,11 @@ function normalizeDiagnosticResult(result) {
   );
 
   return {
-    summary: stringOrFallback(result?.summary, diagnosis.primary_issue || result?.primary_issue || 'AI chưa cung cấp tóm tắt đủ rõ.'),
+    summary: stringOrFallback(result?.summary, result?.error_verification || diagnosis.primary_issue || result?.primary_issue || 'AI chưa cung cấp tóm tắt đủ rõ.'),
+    error_verification: stringOrFallback(
+      result?.error_verification || result?.verification || result?.is_error,
+      result?.summary || diagnosis.primary_issue || 'Chưa đủ bằng chứng để xác thực chắc chắn; cần xem thêm timeline và payload quanh vùng nghi ngờ.'
+    ),
     root_cause: stringOrFallback(
       result?.root_cause,
       [
@@ -364,6 +379,17 @@ function normalizeDiagnosticResult(result) {
         Array.isArray(diagnosis.probable_causes) ? diagnosis.probable_causes.join('; ') : '',
         result?.rootCause
       ].filter(Boolean).join(' - ') || 'AI chưa nêu rõ nguyên nhân gốc; cần xem thêm các message quanh thời điểm lỗi.'
+    ),
+    impact: stringOrFallback(
+      result?.impact || result?.consequence || result?.effect,
+      'Chưa đủ dữ liệu để lượng hóa hậu quả; rủi ro cần đánh giá dựa trên triệu chứng xuất hiện sau message nghi ngờ.'
+    ),
+    reproduction_steps: normalizeStringArrayOrFallback(
+      result?.reproduction_steps ||
+      result?.steps_to_reproduce ||
+      result?.reproduce_steps ||
+      result?.reproduction,
+      ['Chưa đủ điều kiện tái hiện cụ thể; cần replay hoặc thu thêm log quanh các message nghi ngờ và đối chiếu điều kiện kích hoạt trong tài liệu ECU.']
     ),
     suspicious_message_ids: suspiciousIds,
     recommended_action: stringOrFallback(
@@ -443,8 +469,14 @@ function normalizeIntegerArray(value) {
 }
 
 function normalizeStringArray(value) {
+  if (typeof value === 'string' && value.trim()) return [value.trim()];
   if (!Array.isArray(value)) return [];
   return value.map((item) => String(item)).filter(Boolean);
+}
+
+function normalizeStringArrayOrFallback(value, fallback) {
+  const normalized = normalizeStringArray(value);
+  return normalized.length ? normalized : fallback;
 }
 
 function stringOrFallback(value, fallback) {

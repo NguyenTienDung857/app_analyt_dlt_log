@@ -3,6 +3,8 @@ const api = window.nexusApi;
 const LEVELS = ['Fatal', 'Error', 'Warn', 'Info', 'Debug', 'Verbose', 'Trace', 'Control', 'Unknown'];
 const ROW_HEIGHT = 32;
 const MAX_RENDER_ROWS = 120;
+const DEFAULT_LOG_COLUMNS = [46, 66, 108, 82, 640, 58];
+const MIN_LOG_COLUMNS = [34, 42, 72, 58, 180, 44];
 
 const state = {
   messages: [],
@@ -19,6 +21,17 @@ const state = {
   naturalFilter: null,
   parseDone: false,
   aiConfig: null,
+  aiChatMode: 'selection',
+  aiSending: false,
+  aiRange: {
+    min: null,
+    max: null,
+    from: null,
+    to: null,
+    dirty: false
+  },
+  showFullLogTime: false,
+  logColumnWidths: loadLogColumnWidths(),
   renderQueued: false,
   virtualRenderQueued: false,
   lastVirtualStart: -1,
@@ -33,12 +46,10 @@ const el = {
   btnOpen: document.getElementById('btn-open'),
   btnOpenEmpty: document.getElementById('btn-open-empty'),
   btnDocs: document.getElementById('btn-docs'),
-  btnToggleLeft: document.getElementById('btn-toggle-left'),
-  btnToggleFilters: document.getElementById('btn-toggle-filters'),
-  btnToggleRight: document.getElementById('btn-toggle-right'),
   btnAiFocus: document.getElementById('btn-ai-focus'),
   btnTheme: document.getElementById('btn-theme'),
   btnClear: document.getElementById('btn-clear'),
+  searchPanel: document.getElementById('search-panel'),
   fileList: document.getElementById('file-list'),
   parseStatus: document.getElementById('parse-status'),
   parseProgress: document.getElementById('parse-progress'),
@@ -68,6 +79,8 @@ const el = {
   btnExportJson: document.getElementById('btn-export-json'),
   timeline: document.getElementById('timeline'),
   timelineLabel: document.getElementById('timeline-label'),
+  logHeader: document.querySelector('.log-header'),
+  showFullTime: document.getElementById('show-full-time'),
   virtualScroll: document.getElementById('virtual-scroll'),
   virtualSpacer: document.getElementById('virtual-spacer'),
   rowsLayer: document.getElementById('rows-layer'),
@@ -82,8 +95,6 @@ const el = {
   rangeB: document.getElementById('range-b'),
   btnCopyRange: document.getElementById('btn-copy-range'),
   btnAnalyzeRange: document.getElementById('btn-analyze-range'),
-  btnSequence: document.getElementById('btn-sequence'),
-  btnScript: document.getElementById('btn-script'),
   aiStatus: document.getElementById('ai-status'),
   aiReport: document.getElementById('ai-report'),
   aiBaseUrl: document.getElementById('ai-base-url'),
@@ -93,30 +104,34 @@ const el = {
   aiAutoScan: document.getElementById('ai-auto-scan'),
   aiWindow: document.getElementById('ai-window'),
   btnSaveAi: document.getElementById('btn-save-ai'),
-  btnAutoAi: document.getElementById('btn-auto-ai'),
   signalChart: document.getElementById('signal-chart'),
   btnPlotSignal: document.getElementById('btn-plot-signal'),
-  diffPanel: document.getElementById('diff-panel')
-  ,
-  aiContextLine: document.getElementById('ai-context-line'),
-  aiChatLog: document.getElementById('ai-chat-log'),
+  diffPanel: document.getElementById('diff-panel'),
+  aiChatLog: document.getElementById('ai-report'),
   aiChatInput: document.getElementById('ai-chat-input'),
   btnAiChatSend: document.getElementById('btn-ai-chat-send'),
-  btnAiChatSelection: document.getElementById('btn-ai-chat-selection'),
-  btnAiChatFiltered: document.getElementById('btn-ai-chat-filtered'),
-  btnAiChatErrors: document.getElementById('btn-ai-chat-errors'),
+  aiChatModeSelect: document.getElementById('ai-chat-mode-select'),
+  aiChatRangePanel: document.getElementById('ai-chat-range-panel'),
   aiChatUseRange: document.getElementById('ai-chat-use-range'),
   aiChatFrom: document.getElementById('ai-chat-from'),
   aiChatTo: document.getElementById('ai-chat-to'),
   btnAiChatRangeSelected: document.getElementById('btn-ai-chat-range-selected'),
   btnAiChatRangeClear: document.getElementById('btn-ai-chat-range-clear'),
-  aiChatRangeInfo: document.getElementById('ai-chat-range-info')
+  aiChatRangeInfo: document.getElementById('ai-chat-range-info'),
+  aiRangeStart: document.getElementById('ai-range-start'),
+  aiRangeEnd: document.getElementById('ai-range-end'),
+  aiRangeFromLabel: document.getElementById('ai-range-from-label'),
+  aiRangeToLabel: document.getElementById('ai-range-to-label'),
+  aiRangeLimits: document.getElementById('ai-range-limits'),
+  aiRangeSelection: document.getElementById('ai-range-selection')
 };
 
 init();
 
 function init() {
   wireEvents();
+  initLogColumnResize();
+  applyLogColumnTemplate();
   api.onParseEvent(handleParseEvent);
   loadAiConfig();
   refreshDocsStatus();
@@ -129,10 +144,7 @@ function wireEvents() {
   el.btnClear.addEventListener('click', resetWorkspace);
   el.btnTheme.addEventListener('click', toggleTheme);
   el.btnDocs.addEventListener('click', addDocs);
-  el.btnToggleLeft.addEventListener('click', () => toggleWorkspaceClass('hide-left', el.btnToggleLeft, 'Session'));
-  el.btnToggleFilters.addEventListener('click', () => toggleWorkspaceClass('hide-filters', el.btnToggleFilters, 'Filter'));
-  el.btnToggleRight.addEventListener('click', () => toggleWorkspaceClass('hide-right', el.btnToggleRight, 'Detail'));
-  el.btnAiFocus.addEventListener('click', () => toggleWorkspaceClass('ai-focus', el.btnAiFocus, 'AI Focus'));
+  el.btnAiFocus.addEventListener('click', toggleAiFocus);
 
   el.dropZone.addEventListener('dragover', (event) => {
     event.preventDefault();
@@ -179,46 +191,34 @@ function wireEvents() {
   el.btnExportCsv.addEventListener('click', () => exportFiltered('csv'));
   el.btnExportJson.addEventListener('click', () => exportFiltered('json'));
   el.btnSaveAi.addEventListener('click', saveAiConfig);
-  el.btnAutoAi.addEventListener('click', runAutoAiScan);
   el.btnNatural.addEventListener('click', runNaturalSearch);
 
   el.virtualScroll.addEventListener('scroll', scheduleVirtualRows);
   el.rowsLayer.addEventListener('click', handleRowClick);
   el.timeline.addEventListener('click', handleTimelineClick);
   el.minimap.addEventListener('click', handleMinimapClick);
+  el.showFullTime.addEventListener('change', () => {
+    state.showFullLogTime = el.showFullTime.checked;
+    scheduleVirtualRows();
+  });
 
   el.btnCopyPayload.addEventListener('click', copySelectedPayload);
   el.btnCopyDetail.addEventListener('click', copySelectedDetail);
   el.btnBookmark.addEventListener('click', () => toggleBookmark(state.selectedId));
-  el.btnAnalyzeSelected.addEventListener('click', analyzeSelected);
+  el.btnAnalyzeSelected.addEventListener('click', () => setAiChatMode('selection'));
   el.btnCopyRange.addEventListener('click', copyRange);
-  el.btnAnalyzeRange.addEventListener('click', analyzeRange);
-  el.btnSequence.addEventListener('click', generateSequence);
-  el.btnScript.addEventListener('click', generateScript);
+  el.btnAnalyzeRange.addEventListener('click', selectRangeForAi);
   el.btnPlotSignal.addEventListener('click', plotSelectedSignal);
-  el.btnAiChatSend.addEventListener('click', () => sendAiChat('auto'));
-  el.btnAiChatSelection.addEventListener('click', () => sendAiChat('selection'));
-  el.btnAiChatFiltered.addEventListener('click', () => sendAiChat('filtered'));
-  el.btnAiChatErrors.addEventListener('click', () => sendAiChat('errors'));
-  el.btnAiChatRangeSelected.addEventListener('click', () => {
-    el.aiChatFrom.value = el.rangeA.value || el.aiChatFrom.value;
-    el.aiChatTo.value = el.rangeB.value || el.aiChatTo.value;
-    el.aiChatUseRange.checked = true;
-    updateChatRangeInfo();
-  });
-  el.btnAiChatRangeClear.addEventListener('click', () => {
-    el.aiChatFrom.value = '';
-    el.aiChatTo.value = '';
-    el.aiChatUseRange.checked = false;
-    updateChatRangeInfo();
-  });
-  el.aiChatFrom.addEventListener('input', updateChatRangeInfo);
-  el.aiChatTo.addEventListener('input', updateChatRangeInfo);
-  el.aiChatUseRange.addEventListener('change', updateChatRangeInfo);
+  el.btnAiChatSend.addEventListener('click', () => sendAiChat(state.aiChatMode));
+  el.aiChatModeSelect.addEventListener('change', () => setAiChatMode(el.aiChatModeSelect.value));
+  el.btnAiChatRangeSelected.addEventListener('click', selectRangeForAi);
+  el.btnAiChatRangeClear.addEventListener('click', resetAiRangeToFull);
+  el.aiRangeStart.addEventListener('input', (event) => handleAiRangeInput(event, 'from'));
+  el.aiRangeEnd.addEventListener('input', (event) => handleAiRangeInput(event, 'to'));
   el.aiChatInput.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
       event.preventDefault();
-      sendAiChat('auto');
+      sendAiChat(state.aiChatMode);
     }
   });
 
@@ -245,10 +245,14 @@ async function openFiles(paths) {
   }
 }
 
-function toggleWorkspaceClass(className, button, label) {
-  const enabled = el.workspace.classList.toggle(className);
-  button.textContent = enabled ? `${label} Off` : label;
+function toggleAiFocus() {
+  el.workspace.classList.toggle('log-ai-focus');
+  syncLayoutButtons();
   scheduleRender();
+}
+
+function syncLayoutButtons() {
+  el.btnAiFocus.classList.toggle('active', el.workspace.classList.contains('log-ai-focus'));
 }
 
 function handleParseEvent(event) {
@@ -439,6 +443,7 @@ function scheduleRender() {
 }
 
 function renderAll() {
+  applyLogColumnTemplate();
   renderStats();
   renderDistribution();
   renderPagination();
@@ -446,6 +451,8 @@ function renderAll() {
   renderTimeline();
   renderMinimap();
   renderDetail(getSelectedMessage());
+  syncAiRangeControls();
+  updateAiModeUi();
   updateChatRangeInfo();
 }
 
@@ -463,12 +470,6 @@ function renderStats() {
   el.statWarns.textContent = formatNumber(warns);
   el.statEcu.textContent = formatNumber(ecuCount);
   el.statSpan.textContent = spanMs ? formatDuration(spanMs) : '-';
-  if (el.aiContextLine) {
-    const selected = getSelectedMessage();
-    el.aiContextLine.textContent = state.messages.length
-      ? `Context sẵn sàng: ${formatNumber(messages.length)} message, ${formatNumber(state.filtered.length)} đang filter, ${errors} Error/Fatal, ${warns} Warn${selected ? `, đang chọn #${selected.id}` : ''}. Chat sẽ gửi log context + RAG từ system_space.docx.`
-      : 'Chưa có log. Khi chat, app sẽ gửi context log đang chọn/lọc cùng tài liệu ECU local.';
-  }
 }
 
 function renderDistribution() {
@@ -539,17 +540,85 @@ function renderRow(message, localIndex) {
     <div class="log-row log-grid ${selected ? 'selected' : ''} ${bookmarked ? 'bookmarked' : ''} ${aiHit ? 'ai-hit' : ''}" data-id="${message.id}" data-local-index="${localIndex}">
       <div class="mark-cell" data-action="mark">${bookmarked ? 'B' : '-'}</div>
       <div>${message.id}</div>
-      <div title="${escapeHtml(message.time)}">${escapeHtml(message.time)}</div>
+      <div title="${escapeHtml(message.time)}">${escapeHtml(formatLogTime(message))}</div>
       <div>${formatDelta(message.deltaMs)}</div>
-      <div class="level-${message.level}">${escapeHtml(message.level || 'Unknown')}</div>
-      <div>${escapeHtml(message.type || '-')}</div>
-      <div>${escapeHtml(message.ecu || '-')}</div>
-      <div>${escapeHtml(message.apid || '-')}</div>
-      <div>${escapeHtml(message.ctid || '-')}</div>
       <div class="payload-cell" title="${escapeHtml(message.payload || '')}">${highlightSearch(message.payload || '')}</div>
       <div>${message.length || message.payloadLength || 0}</div>
     </div>
   `;
+}
+
+function formatLogTime(message) {
+  const full = String(message?.time || (Number.isFinite(message?.timeMs) ? formatTimeLabel(message.timeMs) : ''));
+  if (state.showFullLogTime) return full || '-';
+  const match = full.match(/\b\d{2}:\d{2}:\d{2}(?:\.\d+)?\b/);
+  if (match) return match[0];
+  if (Number.isFinite(message?.timeMs)) return formatHourMinuteSecond(message.timeMs);
+  return full || '-';
+}
+
+function initLogColumnResize() {
+  if (!el.logHeader) return;
+  const cells = Array.from(el.logHeader.children);
+  cells.forEach((cell, index) => {
+    cell.classList.add('log-header-cell');
+    if (index >= cells.length - 1) return;
+    const handle = document.createElement('span');
+    handle.className = 'log-col-resizer';
+    handle.title = 'Kéo để đổi độ rộng cột';
+    handle.addEventListener('pointerdown', (event) => startLogColumnResize(event, index));
+    cell.appendChild(handle);
+  });
+}
+
+function startLogColumnResize(event, columnIndex) {
+  event.preventDefault();
+  event.stopPropagation();
+  const startX = event.clientX;
+  const startWidth = state.logColumnWidths[columnIndex] || DEFAULT_LOG_COLUMNS[columnIndex];
+  document.body.classList.add('resizing-log-column');
+
+  const handleMove = (moveEvent) => {
+    const delta = moveEvent.clientX - startX;
+    state.logColumnWidths[columnIndex] = clampNumber(startWidth + delta, MIN_LOG_COLUMNS[columnIndex], 1200);
+    saveLogColumnWidths();
+    applyLogColumnTemplate();
+    scheduleVirtualRows();
+  };
+  const handleUp = () => {
+    document.body.classList.remove('resizing-log-column');
+    window.removeEventListener('pointermove', handleMove);
+    window.removeEventListener('pointerup', handleUp);
+  };
+
+  window.addEventListener('pointermove', handleMove);
+  window.addEventListener('pointerup', handleUp, { once: true });
+}
+
+function applyLogColumnTemplate() {
+  const widths = state.logColumnWidths.map((width, index) => Math.max(MIN_LOG_COLUMNS[index], Number(width) || DEFAULT_LOG_COLUMNS[index]));
+  const template = `${widths[0]}px ${widths[1]}px ${widths[2]}px ${widths[3]}px minmax(${widths[4]}px, 1fr) ${widths[5]}px`;
+  document.documentElement.style.setProperty('--log-grid-columns', template);
+}
+
+function loadLogColumnWidths() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem('bltn-log-column-widths') || '[]');
+    if (Array.isArray(parsed) && parsed.length === DEFAULT_LOG_COLUMNS.length) {
+      return parsed.map((value, index) => clampNumber(value, MIN_LOG_COLUMNS[index], 1200));
+    }
+  } catch (_error) {
+    // Ignore invalid saved UI state.
+  }
+  return DEFAULT_LOG_COLUMNS.slice();
+}
+
+function saveLogColumnWidths() {
+  try {
+    localStorage.setItem('bltn-log-column-widths', JSON.stringify(state.logColumnWidths));
+  } catch (_error) {
+    // Local storage can be unavailable in restricted contexts.
+  }
 }
 
 function handleRowClick(event) {
@@ -619,6 +688,9 @@ function renderTimeline() {
   const max = Math.max(...messages.map((message) => message.timeMs));
   const span = Math.max(1, max - min);
   const bins = Array.from({ length: Math.max(20, Math.floor(width / 5)) }, () => ({ normal: 0, warn: 0, error: 0, ai: 0 }));
+  const top = 16;
+  const bottom = height - 24;
+  const plotHeight = Math.max(20, bottom - top);
 
   for (const message of messages) {
     const bin = Math.min(bins.length - 1, Math.floor(((message.timeMs - min) / span) * bins.length));
@@ -630,15 +702,16 @@ function renderTimeline() {
 
   const maxCount = Math.max(1, ...bins.map((bin) => bin.normal + bin.warn + bin.error + bin.ai));
   const barWidth = width / bins.length;
+  drawHourlyTicks(ctx, min, max, width, height, top, bottom);
   bins.forEach((bin, index) => {
-    let y = height - 8;
-    drawStack(ctx, index * barWidth, y, barWidth, bin.normal, maxCount, '#65b5ff', height);
-    y -= (bin.normal / maxCount) * (height - 18);
-    drawStack(ctx, index * barWidth, y, barWidth, bin.warn, maxCount, '#f7c948', height);
-    y -= (bin.warn / maxCount) * (height - 18);
-    drawStack(ctx, index * barWidth, y, barWidth, bin.error, maxCount, '#ff5c6c', height);
-    y -= (bin.error / maxCount) * (height - 18);
-    drawStack(ctx, index * barWidth, y, barWidth, bin.ai, maxCount, '#00b8a9', height);
+    let y = bottom;
+    drawStack(ctx, index * barWidth, y, barWidth, bin.normal, maxCount, '#65b5ff', plotHeight);
+    y -= (bin.normal / maxCount) * plotHeight;
+    drawStack(ctx, index * barWidth, y, barWidth, bin.warn, maxCount, '#f7c948', plotHeight);
+    y -= (bin.warn / maxCount) * plotHeight;
+    drawStack(ctx, index * barWidth, y, barWidth, bin.error, maxCount, '#ff5c6c', plotHeight);
+    y -= (bin.error / maxCount) * plotHeight;
+    drawStack(ctx, index * barWidth, y, barWidth, bin.ai, maxCount, '#00b8a9', plotHeight);
   });
 
   ctx.fillStyle = 'rgba(237,247,242,0.7)';
@@ -647,14 +720,42 @@ function renderTimeline() {
   ctx.textAlign = 'right';
   ctx.fillText(formatTimeLabel(max), width - 8, 14);
   ctx.textAlign = 'left';
-  el.timelineLabel.textContent = `${formatTimeLabel(min)}  ->  ${formatTimeLabel(max)} | ${formatDuration(span)}`;
+  el.timelineLabel.textContent = `${formatTimeLabel(min)} -> ${formatTimeLabel(max)} | ${formatDuration(span)} | hourly ticks`;
 }
 
-function drawStack(ctx, x, yBottom, barWidth, count, maxCount, color, height) {
+function drawStack(ctx, x, yBottom, barWidth, count, maxCount, color, plotHeight) {
   if (!count) return;
-  const barHeight = Math.max(1, (count / maxCount) * (height - 18));
+  const barHeight = Math.max(1, (count / maxCount) * plotHeight);
   ctx.fillStyle = color;
   ctx.fillRect(x, yBottom - barHeight, Math.max(1, barWidth - 1), barHeight);
+}
+
+function drawHourlyTicks(ctx, min, max, width, height, top, bottom) {
+  const hourMs = 60 * 60 * 1000;
+  const firstHour = Math.ceil(min / hourMs) * hourMs;
+  if (!Number.isFinite(firstHour) || firstHour > max) return;
+
+  const hourCount = Math.max(1, Math.floor((max - firstHour) / hourMs) + 1);
+  const labelEvery = Math.max(1, Math.ceil(hourCount / Math.max(1, Math.floor(width / 88))));
+  ctx.save();
+  ctx.font = '10px Cascadia Code, Consolas, monospace';
+  ctx.textAlign = 'left';
+  ctx.strokeStyle = 'rgba(237,247,242,0.11)';
+  ctx.fillStyle = 'rgba(237,247,242,0.56)';
+
+  let index = 0;
+  for (let tick = firstHour; tick <= max; tick += hourMs) {
+    const x = ((tick - min) / Math.max(1, max - min)) * width;
+    ctx.beginPath();
+    ctx.moveTo(x, top);
+    ctx.lineTo(x, bottom);
+    ctx.stroke();
+    if (index % labelEvery === 0) {
+      ctx.fillText(formatHourTick(tick), Math.min(width - 46, x + 3), height - 7);
+    }
+    index += 1;
+  }
+  ctx.restore();
 }
 
 function renderMinimap() {
@@ -800,7 +901,8 @@ async function maybeRunConfiguredAutoScan() {
   const config = await api.getAiConfig();
   state.aiConfig = config;
   if (config.autoScan && config.apiKeySet) {
-    runAutoAiScan();
+    setAiChatMode('errors');
+    setAiStatus('Đã chọn mode Bug tiềm ẩn. AI sẽ chỉ chạy khi bạn bấm Send.', false);
   }
 }
 
@@ -892,6 +994,8 @@ async function analyzeRange() {
 }
 
 async function sendAiChat(mode) {
+  if (state.aiSending) return;
+  mode = mode === 'auto' ? state.aiChatMode : (mode || state.aiChatMode);
   const typedQuestion = el.aiChatInput.value.trim();
   const question = typedQuestion || defaultChatQuestion(mode);
   if (!question) {
@@ -899,65 +1003,107 @@ async function sendAiChat(mode) {
     return;
   }
 
-  const contextMessages = buildChatContextMessages(mode);
-  if (!contextMessages.length) {
+  const rawContextMessages = buildChatContextMessages(mode);
+  if (!rawContextMessages.length) {
     setAiStatus('Chưa có log context để gửi AI. Hãy mở file log trước.', true);
     return;
   }
+  const contextMessages = rawContextMessages.map(toAiMessage);
+  const aiQuestion = withHiddenAiInstructions(question, mode);
+  const maxLogLines = getAiChatMaxLogLines(mode, contextMessages.length);
+  const estimatedContextMessages = Math.min(contextMessages.length, maxLogLines);
 
-  appendChatBubble('user', question, contextMessages.length);
+  appendChatBubble('user', question, estimatedContextMessages);
+  const pendingBubble = appendChatBubble('assistant', 'AI đang phân tích context và chờ phản hồi...', estimatedContextMessages);
   el.aiChatInput.value = '';
-  setAiStatus(`AI đang xử lý chat với ${formatNumber(contextMessages.length)} message context...`, false);
+  setAiSending(true);
+  setAiStatus(`AI đang xử lý chat với tối đa ${formatNumber(estimatedContextMessages)} message context...`, false);
 
   try {
     const response = await api.chatWithAi({
-      question,
+      question: aiQuestion,
       mode,
       messages: contextMessages,
-      stats: collectStats(),
-      maxLogLines: 1200
+      stats: collectAiStats(mode, rawContextMessages),
+      maxLogLines
     });
     if (!response.ok) {
-      appendChatBubble('assistant', `Lỗi AI: ${response.error || 'Không gọi được AI.'}`);
+      updateChatBubble(pendingBubble, 'assistant', `Lỗi AI: ${response.error || 'Không gọi được AI.'}`);
       setAiStatus(response.error || 'AI chat thất bại.', true);
       return;
     }
 
-    appendChatBubble('assistant', response.result, response.promptStats?.contextMessages || contextMessages.length, response.promptStats?.docs || 0);
-    setAiStatus(`AI chat xong. Đã gửi ${response.promptStats?.contextMessages || contextMessages.length} message và ${response.promptStats?.docs || 0} đoạn tài liệu ECU.`, false);
+    const resultText = String(response.result || '').trim();
+    if (!resultText) {
+      throw new Error('AI đã trả về response rỗng. Chưa coi là hoàn tất; hãy thử lại hoặc giảm phạm vi nếu model bị quá tải context.');
+    }
+
+    const responseMeta = {
+      contextMessages: response.promptStats?.contextMessages || contextMessages.length,
+      docs: response.promptStats?.docs || 0,
+      docSources: response.promptStats?.docSources || 0
+    };
+    updateChatBubble(pendingBubble, 'assistant', resultText, responseMeta.contextMessages, responseMeta.docs, responseMeta.docSources);
+    setAiStatus(`AI chat xong. Đã gửi ${formatNumber(responseMeta.contextMessages)} message và ${formatAiDocUsage(responseMeta)}.`, false);
   } catch (error) {
-    appendChatBubble('assistant', `Lỗi AI: ${error.message}`);
+    updateChatBubble(pendingBubble, 'assistant', `Lỗi AI: ${error.message}`);
     setAiStatus(`AI chat lỗi: ${error.message}`, true);
+  } finally {
+    setAiSending(false);
   }
 }
 
+function getAiChatMaxLogLines(mode, contextCount) {
+  if (mode === 'errors') {
+    return Math.max(1, Number(contextCount || 0));
+  }
+  return Math.max(1, Number(state.aiConfig?.maxLogLines || 1400));
+}
+
 function resolveChatRange() {
-  if (!el.aiChatUseRange || !el.aiChatUseRange.checked) return null;
-  const from = resolveTimeInput(el.aiChatFrom.value, true);
-  const to = resolveTimeInput(el.aiChatTo.value, true);
+  if (state.aiChatMode !== 'range') return null;
+  const from = Number(state.aiRange.from ?? el.aiRangeStart.value);
+  const to = Number(state.aiRange.to ?? el.aiRangeEnd.value);
   if (!Number.isFinite(from) || !Number.isFinite(to)) return null;
   return { fromMs: Math.min(from, to), toMs: Math.max(from, to) };
 }
 
 function updateChatRangeInfo() {
   if (!el.aiChatRangeInfo) return;
-  const range = resolveChatRange();
-  if (!range) {
-    el.aiChatRangeInfo.textContent = '';
+  if (!state.messages.length) {
+    el.aiChatRangeInfo.textContent = '0 message';
     return;
   }
-  const count = state.messages.filter((message) => (
-    Number.isFinite(message.timeMs) && message.timeMs >= range.fromMs && message.timeMs <= range.toMs
-  )).length;
+  if (state.aiChatMode === 'selection') {
+    const selected = getSelectedMessage();
+    el.aiChatRangeInfo.textContent = selected
+      ? `Dòng #${selected.id}, kèm message lân cận theo thời gian`
+      : 'Chưa chọn dòng log';
+    return;
+  }
+  if (state.aiChatMode === 'errors') {
+    el.aiChatRangeInfo.textContent = `${formatNumber(state.messages.length)} message toàn log`;
+    return;
+  }
+  const range = resolveChatRange();
+  if (!range) {
+    el.aiChatRangeInfo.textContent = 'Chưa chọn khoảng thời gian';
+    return;
+  }
+  const count = countMessagesInRange(range.fromMs, range.toMs);
   el.aiChatRangeInfo.textContent = `${formatNumber(count)} message trong khoảng đã chọn`;
 }
 
 function buildChatContextMessages(mode) {
   if (!state.messages.length) return [];
+  mode = mode || state.aiChatMode;
 
-  const chatRange = resolveChatRange();
-  if (chatRange) {
-    return buildLocalContext(chatRange.fromMs, chatRange.toMs, 0, 1500);
+  if (mode === 'range') {
+    const chatRange = resolveChatRange();
+    if (chatRange) {
+      return messagesInRange(chatRange.fromMs, chatRange.toMs);
+    }
+    return [];
   }
 
   if (mode === 'selection') {
@@ -968,19 +1114,7 @@ function buildChatContextMessages(mode) {
   }
 
   if (mode === 'errors') {
-    const clusters = buildFaultClusters();
-    const targets = clusters.length ? clusters : buildSuspiciousAutoScanTargets();
-    const seen = new Set();
-    const output = [];
-    for (const target of targets.slice(0, 10)) {
-      for (const message of buildLocalContext(target.fromMs, target.toMs, Math.max(2000, Number(el.aiWindow.value || 500)), 180)) {
-        if (!seen.has(message.id)) {
-          output.push(message);
-          seen.add(message.id);
-        }
-      }
-    }
-    if (output.length) return output;
+    return state.messages.slice();
   }
 
   if (mode === 'filtered' || state.filtered.length) {
@@ -1011,25 +1145,237 @@ function buildFilteredContextMessages(limit) {
 }
 
 function defaultChatQuestion(mode) {
-  if (mode === 'selection') return 'Hãy phân tích message đang chọn, nêu nguyên nhân nghi ngờ, bằng chứng và bước kiểm tra tiếp theo.';
-  if (mode === 'filtered') return 'Hãy phân tích các message đang được filter và tìm bất thường quan trọng nhất.';
-  if (mode === 'errors') return 'Hãy phân tích các cụm lỗi/nghi ngờ trong log và chỉ ra root cause có khả năng cao nhất.';
-  return 'Hãy phân tích context log hiện tại và tìm lỗi Built-in Cam ECU quan trọng nhất.';
+  if (mode === 'selection') {
+    return 'Hãy phân tích dòng log hiện tại và các message lân cận. Trả lời đúng 4 mục: xác thực có phải lỗi không, nguyên nhân vì sao lỗi, hậu quả lỗi, cách tái hiện lỗi.';
+  }
+  if (mode === 'range') {
+    return 'Hãy phân tích khoảng thời gian đã chọn. Trả lời đúng 4 mục: xác thực có phải lỗi không, nguyên nhân vì sao lỗi, hậu quả lỗi, cách tái hiện lỗi.';
+  }
+  if (mode === 'errors') {
+    return 'Tôi nghi ngờ có bug tiềm ẩn. Hãy quét toàn bộ timeline + payload để tìm lỗi quan trọng nhất và trả lời đúng 4 mục: xác thực có phải lỗi không, nguyên nhân vì sao lỗi, hậu quả lỗi, cách tái hiện lỗi.';
+  }
+  return 'Hãy phân tích context log hiện tại và trả lời theo cấu trúc chẩn đoán lỗi.';
 }
 
-function appendChatBubble(role, text, contextCount = null, docCount = null) {
+function withHiddenAiInstructions(question, mode) {
+  const range = mode === 'range' ? resolveChatRange() : null;
+  const rangeText = range ? `Range: ${formatTimeLabel(range.fromMs)} -> ${formatTimeLabel(range.toMs)}.` : '';
+  return [
+    question,
+    '',
+    'Yeu cau an cua UI: tu dung timeline/sequence tu context, neu co nghi van loi thi luon neu cach tai hien/sequence tai hien ngan gon. Khong can nguoi dung bam nut rieng cho sequence hay reproduction.',
+    rangeText
+  ].filter(Boolean).join('\n');
+}
+
+function setAiChatMode(mode) {
+  state.aiChatMode = mode || 'selection';
+  if (el.aiChatUseRange) {
+    el.aiChatUseRange.checked = state.aiChatMode === 'range';
+  }
+  if (state.aiChatMode === 'range' && !Number.isFinite(state.aiRange.from)) {
+    resetAiRangeToFull(false);
+  }
+  updateAiModeUi();
+  updateChatRangeInfo();
+  el.aiChatInput.focus();
+}
+
+function updateAiModeUi() {
+  if (el.aiChatModeSelect) {
+    el.aiChatModeSelect.value = state.aiChatMode;
+  }
+  if (el.aiChatRangePanel) {
+    el.aiChatRangePanel.classList.toggle('active', state.aiChatMode === 'range');
+  }
+  const rangeDisabled = !state.messages.length;
+  for (const input of [el.aiRangeStart, el.aiRangeEnd]) {
+    if (input) input.disabled = rangeDisabled;
+  }
+}
+
+function syncAiRangeControls() {
+  if (!el.aiRangeStart || !el.aiRangeEnd) return;
+  if (!Number.isFinite(state.firstTimeMs) || !Number.isFinite(state.lastTimeMs)) {
+    el.aiRangeStart.disabled = true;
+    el.aiRangeEnd.disabled = true;
+    el.aiRangeStart.value = '0';
+    el.aiRangeEnd.value = '0';
+    el.aiRangeFromLabel.textContent = '-';
+    el.aiRangeToLabel.textContent = '-';
+    el.aiRangeSelection.style.left = '0%';
+    el.aiRangeSelection.style.width = '0%';
+    el.aiRangeLimits.textContent = 'Chưa có log';
+    return;
+  }
+
+  const min = state.firstTimeMs;
+  const max = Math.max(min, state.lastTimeMs);
+  const boundsChanged = state.aiRange.min !== min || state.aiRange.max !== max;
+  state.aiRange.min = min;
+  state.aiRange.max = max;
+  if (boundsChanged || !state.aiRange.dirty || !Number.isFinite(state.aiRange.from) || !Number.isFinite(state.aiRange.to)) {
+    state.aiRange.from = min;
+    state.aiRange.to = max;
+  }
+
+  const step = getAiRangeStep(max - min);
+  for (const input of [el.aiRangeStart, el.aiRangeEnd]) {
+    input.min = String(min);
+    input.max = String(max);
+    input.step = String(step);
+    input.disabled = false;
+  }
+  state.aiRange.from = clampNumber(state.aiRange.from, min, max);
+  state.aiRange.to = clampNumber(state.aiRange.to, min, max);
+  if (state.aiRange.from > state.aiRange.to) {
+    const tmp = state.aiRange.from;
+    state.aiRange.from = state.aiRange.to;
+    state.aiRange.to = tmp;
+  }
+  applyAiRangeValues();
+}
+
+function handleAiRangeInput(_event, edge) {
+  state.aiRange.dirty = true;
+  let from = Number(el.aiRangeStart.value);
+  let to = Number(el.aiRangeEnd.value);
+  if (edge === 'from' && from > to) to = from;
+  if (edge === 'to' && to < from) from = to;
+  setAiRange(from, to, true);
+  setAiChatMode('range');
+}
+
+function resetAiRangeToFull(focus = true) {
+  if (!Number.isFinite(state.firstTimeMs) || !Number.isFinite(state.lastTimeMs)) return;
+  state.aiRange.dirty = false;
+  setAiRange(state.firstTimeMs, state.lastTimeMs, false);
+  setAiChatMode('range');
+  if (focus) el.aiChatInput.focus();
+}
+
+function selectRangeForAi() {
+  const range = resolveRange() || selectedRange();
+  if (!range) {
+    setAiStatus('Range A/B is invalid.', true);
+    return;
+  }
+  setAiRange(range.fromMs, range.toMs, true);
+  setAiChatMode('range');
+}
+
+function prepareRangePrompt(prompt) {
+  selectRangeForAi();
+  if (prompt && !el.aiChatInput.value.trim()) {
+    el.aiChatInput.value = prompt;
+  }
+}
+
+function setAiRange(fromMs, toMs, dirty) {
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) return;
+  const min = Number.isFinite(state.aiRange.min) ? state.aiRange.min : Math.min(fromMs, toMs);
+  const max = Number.isFinite(state.aiRange.max) ? state.aiRange.max : Math.max(fromMs, toMs);
+  state.aiRange.from = clampNumber(Math.min(fromMs, toMs), min, max);
+  state.aiRange.to = clampNumber(Math.max(fromMs, toMs), min, max);
+  state.aiRange.dirty = Boolean(dirty);
+  applyAiRangeValues();
+  updateChatRangeInfo();
+}
+
+function applyAiRangeValues() {
+  const from = Number.isFinite(state.aiRange.from) ? state.aiRange.from : 0;
+  const to = Number.isFinite(state.aiRange.to) ? state.aiRange.to : from;
+  el.aiRangeStart.value = String(from);
+  el.aiRangeEnd.value = String(to);
+  el.aiChatFrom.value = String(from);
+  el.aiChatTo.value = String(to);
+  el.aiRangeFromLabel.textContent = formatTimeLabel(from);
+  el.aiRangeToLabel.textContent = formatTimeLabel(to);
+  if (Number.isFinite(state.aiRange.min) && Number.isFinite(state.aiRange.max)) {
+    const span = Math.max(1, state.aiRange.max - state.aiRange.min);
+    const left = ((Math.min(from, to) - state.aiRange.min) / span) * 100;
+    const width = ((Math.max(from, to) - Math.min(from, to)) / span) * 100;
+    el.aiRangeSelection.style.left = `${clampNumber(left, 0, 100)}%`;
+    el.aiRangeSelection.style.width = `${clampNumber(width, 0, 100)}%`;
+    el.aiRangeLimits.textContent = `${formatHourTick(state.aiRange.min)} -> ${formatHourTick(state.aiRange.max)}`;
+  }
+}
+
+function getAiRangeStep(spanMs) {
+  if (spanMs > 24 * 60 * 60 * 1000) return 60 * 1000;
+  if (spanMs > 60 * 60 * 1000) return 1000;
+  if (spanMs > 60 * 1000) return 100;
+  return 1;
+}
+
+function messagesInRange(fromMs, toMs) {
+  const start = Math.min(fromMs, toMs);
+  const end = Math.max(fromMs, toMs);
+  return state.messages.filter((message) => Number.isFinite(message.timeMs) && message.timeMs >= start && message.timeMs <= end);
+}
+
+function countMessagesInRange(fromMs, toMs) {
+  let count = 0;
+  const start = Math.min(fromMs, toMs);
+  const end = Math.max(fromMs, toMs);
+  for (const message of state.messages) {
+    if (Number.isFinite(message.timeMs) && message.timeMs >= start && message.timeMs <= end) count += 1;
+  }
+  return count;
+}
+
+function toAiMessage(message) {
+  return {
+    time: formatAiClockTime(message),
+    payload: message.payload || ''
+  };
+}
+
+function formatAiClockTime(message) {
+  const raw = String(message?.time || '');
+  const match = raw.match(/\b\d{2}:\d{2}:\d{2}(?:\.\d+)?\b/);
+  if (match) return match[0].split('.')[0];
+  if (Number.isFinite(message?.timeMs)) return formatHourMinuteSecond(message.timeMs);
+  return raw || '-';
+}
+
+function appendChatBubble(role, text, contextCount = null, docCount = null, docSourceCount = null) {
   const bubble = document.createElement('div');
+  bubble.className = `chat-bubble ${role}`;
+  updateChatBubble(bubble, role, text, contextCount, docCount, docSourceCount);
+  el.aiChatLog.appendChild(bubble);
+  el.aiChatLog.scrollTop = el.aiChatLog.scrollHeight;
+  return bubble;
+}
+
+function updateChatBubble(bubble, role, text, contextCount = null, docCount = null, docSourceCount = null) {
+  if (!bubble) return;
   bubble.className = `chat-bubble ${role}`;
   const meta = [];
   if (contextCount !== null) meta.push(`${formatNumber(contextCount)} log messages`);
-  if (docCount !== null) meta.push(`${formatNumber(docCount)} ECU docs`);
+  if (docCount !== null) meta.push(formatAiDocUsage({ docs: docCount, docSources: docSourceCount }));
   bubble.innerHTML = `
     <strong>${role === 'user' ? 'Bạn' : 'AI'}</strong>
     ${meta.length ? `<span class="chat-meta">${escapeHtml(meta.join(' | '))}</span>` : ''}
     <p>${escapeHtml(String(text || '')).replace(/\n/g, '<br>')}</p>
   `;
-  el.aiChatLog.appendChild(bubble);
   el.aiChatLog.scrollTop = el.aiChatLog.scrollHeight;
+}
+
+function formatAiDocUsage(meta = {}) {
+  const docs = Number(meta.docs || 0);
+  const sources = Number(meta.docSources || 0);
+  if (!docs) return '0 đoạn trích ECU';
+  return sources
+    ? `${formatNumber(docs)} đoạn trích / ${formatNumber(sources)} tài liệu ECU`
+    : `${formatNumber(docs)} đoạn trích ECU`;
+}
+
+function setAiSending(isSending) {
+  state.aiSending = Boolean(isSending);
+  el.btnAiChatSend.disabled = isSending;
+  el.aiChatModeSelect.disabled = isSending;
+  el.btnAiChatSend.textContent = isSending ? 'Đợi...' : 'Send';
 }
 
 async function runAiAnalysis(payload) {
@@ -1072,8 +1418,24 @@ function enrichAiResult(result, requestPayload) {
     next.summary = `AI đã đánh dấu ${ids.length || 1} message nghi ngờ trong cửa sổ log. Message nổi bật: #${first.id} ${first.level || 'Unknown'} ${first.ecu || '-'}/${first.apid || '-'}/${first.ctid || '-'} tại ${first.time || '-'} với payload: ${(first.payload || '').slice(0, 220)}.`;
   }
 
+  if (isSparseVietnameseField(next.error_verification, 'xác thực') && first) {
+    next.error_verification = `Có dấu hiệu lỗi/nghi vấn quanh message #${first.id} tại ${first.time || '-'}, nhưng cần đối chiếu thêm tài liệu và log lân cận để xác thực tuyệt đối.`;
+  }
+
   if (isSparseVietnameseField(next.root_cause, 'nguyên nhân') && first) {
     next.root_cause = `Chưa đủ bằng chứng để kết luận tuyệt đối, nhưng điểm nghi ngờ chính nằm ở luồng ${first.ecu || '-'}/${first.apid || '-'}/${first.ctid || '-'} quanh message #${first.id}. Cần đối chiếu các message trước/sau, trạng thái camera/storage/network và mapping non-verbose nếu có.`;
+  }
+
+  if (isSparseVietnameseField(next.impact, 'hậu quả')) {
+    next.impact = 'Chưa đủ dữ liệu để lượng hóa hậu quả; cần kiểm tra triệu chứng sau vùng nghi ngờ như timeout, mất frame, reset, degraded mode hoặc DTC phát sinh.';
+  }
+
+  if (!Array.isArray(next.reproduction_steps) || !next.reproduction_steps.length) {
+    next.reproduction_steps = [
+      'Replay hoặc tái tạo điều kiện quanh các message nghi ngờ theo đúng thứ tự thời gian.',
+      'Mở rộng cửa sổ thời gian trước/sau lỗi và kiểm tra điều kiện kích hoạt trong tài liệu ECU.',
+      'Xác nhận lại bằng log mới có cùng payload/timing hoặc DTC tương ứng.'
+    ];
   }
 
   if (isSparseVietnameseField(next.recommended_action, 'khuyến nghị')) {
@@ -1525,8 +1887,10 @@ function applyAiHighlights(ids) {
 
 function renderAiReport(result) {
   el.aiReport.innerHTML = `
-    <div class="report-card"><h4>Tóm tắt</h4><p>${escapeHtml(result.summary || '-')}</p></div>
-    <div class="report-card"><h4>Nguyên nhân gốc</h4><p>${escapeHtml(result.root_cause || '-')}</p></div>
+    <div class="report-card"><h4>1. Xác thực có phải lỗi không</h4><p>${escapeHtml(result.error_verification || result.summary || '-')}</p></div>
+    <div class="report-card"><h4>2. Nguyên nhân vì sao lỗi</h4><p>${escapeHtml(result.root_cause || '-')}</p></div>
+    <div class="report-card"><h4>3. Hậu quả lỗi</h4><p>${escapeHtml(result.impact || '-')}</p></div>
+    <div class="report-card"><h4>4. Cách tái hiện lỗi</h4><pre>${escapeHtml(JSON.stringify(result.reproduction_steps || [], null, 2))}</pre></div>
     <div class="report-card"><h4>Hành động khuyến nghị</h4><p>${escapeHtml(result.recommended_action || '-')}</p></div>
     <div class="report-card"><h4>Message nghi ngờ</h4><p>${escapeHtml((result.suspicious_message_ids || []).join(', ') || '-')}</p></div>
     <div class="report-card"><h4>Bằng chứng</h4><pre>${escapeHtml(JSON.stringify(result.evidence || [], null, 2))}</pre></div>
@@ -1843,10 +2207,40 @@ function collectStats() {
   };
 }
 
+function collectAiStats(mode, contextMessages) {
+  const levels = {};
+  for (const level of LEVELS) levels[level] = 0;
+  for (const message of state.messages) {
+    levels[message.level] = (levels[message.level] || 0) + 1;
+  }
+  const range = mode === 'range' ? resolveChatRange() : null;
+  return {
+    mode,
+    totalMessages: state.messages.length,
+    contextMessages: Array.isArray(contextMessages) ? contextMessages.length : 0,
+    files: state.files.filter(Boolean).map((file) => ({
+      fileName: file.fileName,
+      size: file.size,
+      messages: file.messages
+    })),
+    timeStart: state.firstTimeMs !== null ? formatTimeLabel(state.firstTimeMs) : '',
+    timeEnd: state.lastTimeMs !== null ? formatTimeLabel(state.lastTimeMs) : '',
+    timeSpanMs: state.firstTimeMs !== null && state.lastTimeMs !== null ? state.lastTimeMs - state.firstTimeMs : 0,
+    selectedId: state.selectedId,
+    selectedRange: range ? {
+      from: formatTimeLabel(range.fromMs),
+      to: formatTimeLabel(range.toMs)
+    } : null,
+    levels
+  };
+}
+
 function resetWorkspace() {
   clearData();
   resetFilters();
   el.workspace.classList.add('hidden');
+  el.workspace.classList.remove('hide-left', 'hide-right', 'ai-focus', 'log-ai-focus');
+  syncLayoutButtons();
   el.dropZone.classList.remove('hidden');
   el.parseStatus.textContent = 'Idle';
   el.parseProgress.style.width = '0%';
@@ -1865,6 +2259,14 @@ function clearData() {
   state.lastTimeMs = null;
   state.currentPage = 1;
   state.parseDone = false;
+  state.aiChatMode = 'selection';
+  state.aiRange = {
+    min: null,
+    max: null,
+    from: null,
+    to: null,
+    dirty: false
+  };
   el.fileList.innerHTML = '';
   el.virtualScroll.scrollTop = 0;
   renderAll();
@@ -1939,6 +2341,21 @@ function formatTimeLabel(ms) {
   if (!Number.isFinite(ms)) return '-';
   const date = new Date(ms);
   return date.toISOString().replace('T', ' ').replace('Z', '');
+}
+
+function formatHourTick(ms) {
+  if (!Number.isFinite(ms)) return '-';
+  const date = new Date(ms);
+  return date.toISOString().slice(11, 16);
+}
+
+function formatHourMinuteSecond(ms) {
+  if (!Number.isFinite(ms)) return '-';
+  return new Date(ms).toISOString().slice(11, 19);
+}
+
+function clampNumber(value, min, max) {
+  return Math.min(max, Math.max(min, Number(value)));
 }
 
 function shortPath(filePath) {

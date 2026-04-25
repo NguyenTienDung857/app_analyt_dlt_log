@@ -30,7 +30,7 @@ function createWindow() {
     minWidth: 1180,
     minHeight: 760,
     backgroundColor: '#08110f',
-    title: 'NEXUS DLT AI Workbench',
+    title: 'BLTN-Analysis Log',
     webPreferences: {
       preload: path.join(APP_ROOT, 'preload.js'),
       contextIsolation: true,

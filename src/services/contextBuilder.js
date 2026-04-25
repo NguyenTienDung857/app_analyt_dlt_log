@@ -19,6 +19,7 @@ function buildAnalysisPayload(request, ragDocs, config) {
       selectedMessages: selection.selected.length,
       contextMessages: selection.context.length,
       docs: docs.length,
+      docSources: countDocSources(docs),
       windowMs,
       maxLines
     }
@@ -102,17 +103,18 @@ function buildScriptPayload(request, ragDocs, config) {
 
 function buildChatPayload(request, ragDocs, config) {
   const messages = Array.isArray(request.messages) ? request.messages : [];
-  const maxLines = Math.min(Number(request.maxLogLines || config.maxLogLines || DEFAULT_MAX_LINES), 1200);
+  const maxLines = Math.max(1, Number(request.maxLogLines || config.maxLogLines || DEFAULT_MAX_LINES));
   const context = reduceContext(messages, maxLines);
   const docs = trimDocs(ragDocs, 9000);
 
   return {
     systemPrompt: [
       'Bạn là AI phân tích lỗi Built-in Cam ECU, ưu tiên tìm nguyên nhân lỗi từ DLT log.',
-      'Luôn trả lời bằng tiếng Việt, rõ ràng, thực dụng, có bằng chứng từ message id nếu có.',
-      'Bạn được cung cấp context log đã được ứng dụng chọn/lọc, không phải toàn bộ file.',
+      'Luôn trả lời bằng tiếng Việt, rõ ràng, thực dụng, có bằng chứng từ thời điểm và payload nếu có.',
+      'Context log gửi cho bạn chỉ gồm thời gian HH:mm:ss và payload. Không dựa vào ngày, delta, ECU/APID/CTID/type/level/id vì các field đó không được gửi vào prompt.',
       'Nếu thiếu dữ liệu, nói rõ cần thêm khoảng thời gian/message/mapping FIBEX/ARXML nào.',
       'Với DLT non-verbose, không suy diễn raw hex thành text nếu không có mapping.',
+      'Nếu câu hỏi là nghi vấn lỗi/bug, bắt buộc trả lời đúng 4 mục: 1. Xác thực có phải lỗi không. 2. Nguyên nhân vì sao lỗi. 3. Hậu quả lỗi. 4. Cách tái hiện lỗi.',
       '',
       'Tài liệu ECU liên quan từ RAG:',
       formatDocs(docs)
@@ -120,17 +122,15 @@ function buildChatPayload(request, ragDocs, config) {
     userPrompt: [
       `Câu hỏi của người dùng: ${request.question || ''}`,
       '',
-      'Thống kê log/session:',
-      JSON.stringify(request.stats || {}, null, 2),
-      '',
-      'Context log gửi kèm:',
+      'Context log gửi kèm (chỉ HH:mm:ss và payload):',
       formatMessages(context),
       '',
-      'Hãy trả lời như một kỹ sư chẩn đoán: kết luận, bằng chứng message id, giả thuyết nguyên nhân, bước kiểm tra tiếp theo.'
+      'Hãy trả lời như một kỹ sư chẩn đoán. Với nghi vấn lỗi/bug, dùng đúng 4 mục: xác thực lỗi, nguyên nhân, hậu quả, cách tái hiện.'
     ].join('\n'),
     promptStats: {
       contextMessages: context.length,
       docs: docs.length,
+      docSources: countDocSources(docs),
       maxLines
     }
   };
@@ -207,9 +207,9 @@ function diagnosticSystemPrompt(docs) {
     'Bắt buộc trả lời bằng tiếng Việt trong mọi field dạng text.',
     'Mục tiêu: tìm nguyên nhân gốc từ DLT log, không chỉ tóm tắt. Ưu tiên Error/Fatal, khoảng reset/ignition-cycle, bằng chứng DTC/UDS, triệu chứng camera FPS/voltage/temperature/storage/network và thứ tự timing.',
     'Dùng các đoạn tài liệu ECU được cung cấp làm căn cứ. Nếu chưa đủ bằng chứng, nói rõ đang thiếu log/message/mapping nào.',
-    'Với DLT non-verbose, không diễn giải raw hex thành text. Chỉ dùng decoded text, message ID, APID/CTID, timing và mapping/tài liệu nếu có.',
+    'Với DLT non-verbose, không diễn giải raw hex thành text. Chỉ dùng timeline/time, payload đã decode và mapping/tài liệu nếu có.',
     'Trả JSON structured đúng schema. suspicious_message_ids phải là id số của các dòng log được cung cấp.',
-    'Không được để summary/root_cause/recommended_action rỗng. Nếu chưa chắc chắn, vẫn phải nêu giả thuyết hợp lý nhất và mức độ tin cậy.',
+    'Không được để các mục xác thực lỗi, nguyên nhân, hậu quả, cách tái hiện rỗng. Nếu chưa chắc chắn, vẫn phải nêu giả thuyết hợp lý nhất và mức độ tin cậy.',
     '',
     'Đoạn tài liệu ECU:',
     formatDocs(docs)
@@ -222,16 +222,15 @@ function diagnosticUserPrompt(request, selection, query) {
     `Mục tiêu/câu hỏi của người dùng: ${request.query || 'Tìm lỗi ECU có khả năng cao nhất và nguyên nhân gốc.'}`,
     `Từ khóa ngữ cảnh: ${query}`,
     '',
-    'Thống kê log:',
-    JSON.stringify(request.stats || {}, null, 2),
-    '',
-    'Các DLT message trong ngữ cảnh:',
+    'Các DLT message trong ngữ cảnh (chỉ HH:mm:ss và payload):',
     formatMessages(selection.context),
     '',
     'Yêu cầu output:',
-    '- summary: tóm tắt tiếng Việt, nói lỗi gì xảy ra và xảy ra khi nào',
-    '- root_cause: nguyên nhân gốc có khả năng cao nhất, kèm lập luận dựa trên log',
-    '- suspicious_message_ids: id chính xác cần highlight/bookmark',
+    '- error_verification: xác thực đây có phải lỗi hay không, mức chắc chắn, bằng chứng theo thời điểm/payload',
+    '- root_cause: nguyên nhân vì sao lỗi, kèm lập luận dựa trên log và tài liệu',
+    '- impact: hậu quả/tác động của lỗi',
+    '- reproduction_steps: cách tái hiện lỗi hoặc điều kiện cần để tái hiện',
+    '- suspicious_message_ids: để mảng rỗng nếu context không có id message',
     '- recommended_action: hành động kỹ thuật tiếp theo, viết tiếng Việt'
   ].join('\n');
 }
@@ -243,7 +242,7 @@ function buildDiagnosticQuery(request, selection) {
     ...selection.context
       .filter((message) => isFaultLevel(message.level) || message.level === 'Warn')
       .slice(0, 80)
-      .map((message) => `${message.level} ${message.ecu} ${message.apid} ${message.ctid} ${message.messageId || ''} ${message.payload}`)
+      .map((message) => `${message.time || message.timeMs} ${message.payload}`)
   ];
   return parts.join(' ').slice(0, 8000);
 }
@@ -255,17 +254,7 @@ function formatMessages(messages) {
 
   return messages.map((message) => {
     const payload = contextSafePayload(message);
-    const delta = Number.isFinite(message.deltaMs) ? `${message.deltaMs.toFixed(3)}ms` : '-';
-    return [
-      `[${message.id}]`,
-      `${message.time || message.timeMs}`,
-      `dt=${delta}`,
-      message.level || 'Unknown',
-      `${message.ecu || '-'}/${message.apid || '-'}/${message.ctid || '-'}`,
-      message.type || '-',
-      message.messageId ? `msg=${message.messageId}` : '',
-      payload
-    ].filter(Boolean).join(' | ');
+    return `time=${formatAiClockTime(message)} | payload=${payload}`;
   }).join('\n');
 }
 
@@ -274,9 +263,18 @@ function contextSafePayload(message) {
   if (message.nonVerbose && message.decodeStatus === 'non-verbose-needs-fibex-arxml') {
     return payload.includes('decoder mapping required')
       ? payload
-      : `[non-verbose ${message.messageId || ''}] ${payload.replace(/[0-9A-F]{2}(?:\s+[0-9A-F]{2}){4,}/gi, '[raw hex withheld]')}`;
+      : `[non-verbose] ${payload.replace(/[0-9A-F]{2}(?:\s+[0-9A-F]{2}){4,}/gi, '[raw hex withheld]')}`;
   }
   return payload.slice(0, 600);
+}
+
+function formatAiClockTime(message) {
+  const raw = String(message?.time || '');
+  const match = raw.match(/\b\d{2}:\d{2}:\d{2}(?:\.\d+)?\b/);
+  if (match) return match[0].split('.')[0];
+  const timeMs = Number(message?.timeMs);
+  if (Number.isFinite(timeMs)) return new Date(timeMs).toISOString().slice(11, 19);
+  return raw || '-';
 }
 
 function formatDocs(docs) {
@@ -304,6 +302,12 @@ function trimDocs(docs, maxChars) {
     used += text.length;
   }
   return result;
+}
+
+function countDocSources(docs) {
+  return new Set((docs || [])
+    .map((doc) => doc.sourcePath || doc.source || '')
+    .filter(Boolean)).size;
 }
 
 function isFaultLevel(level) {
