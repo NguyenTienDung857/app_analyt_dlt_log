@@ -1,17 +1,18 @@
 const api = window.nexusApi;
 
 const LEVELS = ['Fatal', 'Error', 'Warn', 'Info', 'Debug', 'Verbose', 'Trace', 'Control', 'Unknown'];
-const ROW_HEIGHT = 32;
+const MIN_ROW_HEIGHT = 34;
+const ROW_LINE_HEIGHT = 17;
+const ROW_VERTICAL_PADDING = 10;
 const MAX_RENDER_ROWS = 120;
-const DEFAULT_LOG_COLUMNS = [46, 66, 108, 82, 640, 58];
-const MIN_LOG_COLUMNS = [34, 42, 72, 58, 180, 44];
+const DEFAULT_LOG_COLUMNS = [66, 108, 76, 640, 58];
+const MIN_LOG_COLUMNS = [42, 72, 52, 180, 44];
 const DEFAULT_RUNTIME_MODEL = 'gpt-5.2';
 
 const state = {
   messages: [],
   filtered: [],
   files: [],
-  bookmarks: new Set(),
   aiHighlights: new Set(),
   selectedId: null,
   firstTimeMs: null,
@@ -25,8 +26,10 @@ const state = {
   aiConfigUnlocked: false,
   aiChatMode: 'selection',
   aiSending: false,
+  naturalSearching: false,
   aiGuidance: loadTextSetting('bltn-ai-guidance'),
   aiRange: {
+    unit: 'time',
     min: null,
     max: null,
     from: null,
@@ -34,6 +37,7 @@ const state = {
     dirty: false
   },
   filterRange: {
+    unit: 'time',
     min: null,
     max: null,
     from: null,
@@ -44,6 +48,7 @@ const state = {
   logColumnWidths: loadLogColumnWidths(),
   renderQueued: false,
   virtualRenderQueued: false,
+  virtualMetrics: null,
   lastVirtualStart: -1,
   lastVirtualEnd: -1,
   lastVirtualCount: -1
@@ -84,6 +89,8 @@ const el = {
   timeFrom: document.getElementById('time-from'),
   timeTo: document.getElementById('time-to'),
   filterRangePanel: document.getElementById('filter-time-range-panel'),
+  filterRangeTitle: document.getElementById('filter-range-title'),
+  btnFilterRangeUnit: document.getElementById('btn-filter-range-unit'),
   filterRangeStart: document.getElementById('filter-range-start'),
   filterRangeEnd: document.getElementById('filter-range-end'),
   filterRangeSelection: document.getElementById('filter-range-selection'),
@@ -91,10 +98,8 @@ const el = {
   filterRangeToLabel: document.getElementById('filter-range-to-label'),
   filterRangeLimits: document.getElementById('filter-range-limits'),
   btnFilterRangeClear: document.getElementById('btn-filter-range-clear'),
-  markedOnly: document.getElementById('marked-only'),
   btnResetFilter: document.getElementById('btn-reset-filter'),
   btnExportCsv: document.getElementById('btn-export-csv'),
-  btnExportJson: document.getElementById('btn-export-json'),
   timeline: document.getElementById('timeline'),
   timelineLabel: document.getElementById('timeline-label'),
   logHeader: document.querySelector('.log-header'),
@@ -103,22 +108,14 @@ const el = {
   btnFocusSearch: document.getElementById('btn-focus-search'),
   focusSearchInput: document.getElementById('focus-search-input'),
   btnFocusSearchClose: document.getElementById('btn-focus-search-close'),
-  btnLogScrollUp: document.getElementById('btn-log-scroll-up'),
-  btnLogScrollDown: document.getElementById('btn-log-scroll-down'),
-  btnLogScrollEnd: document.getElementById('btn-log-scroll-end'),
   virtualScroll: document.getElementById('virtual-scroll'),
   virtualSpacer: document.getElementById('virtual-spacer'),
   rowsLayer: document.getElementById('rows-layer'),
+  logScrollbar: document.getElementById('log-scrollbar'),
+  logScrollbarThumb: document.getElementById('log-scrollbar-thumb'),
   minimap: document.getElementById('minimap'),
   detailEmpty: document.getElementById('detail-empty'),
   detailPanel: document.getElementById('detail-panel'),
-  btnCopyPayload: document.getElementById('btn-copy-payload'),
-  btnBookmark: document.getElementById('btn-bookmark'),
-  btnAnalyzeSelected: document.getElementById('btn-analyze-selected'),
-  rangeA: document.getElementById('range-a'),
-  rangeB: document.getElementById('range-b'),
-  btnCopyRange: document.getElementById('btn-copy-range'),
-  btnAnalyzeRange: document.getElementById('btn-analyze-range'),
   aiStatus: document.getElementById('ai-status'),
   aiReport: document.getElementById('ai-report'),
   aiConfigPanel: document.getElementById('ai-config-panel'),
@@ -147,9 +144,10 @@ const el = {
   aiChatUseRange: document.getElementById('ai-chat-use-range'),
   aiChatFrom: document.getElementById('ai-chat-from'),
   aiChatTo: document.getElementById('ai-chat-to'),
-  btnAiChatRangeSelected: document.getElementById('btn-ai-chat-range-selected'),
   btnAiChatRangeClear: document.getElementById('btn-ai-chat-range-clear'),
   aiChatRangeInfo: document.getElementById('ai-chat-range-info'),
+  aiRangeTitle: document.getElementById('ai-range-title'),
+  btnAiRangeUnit: document.getElementById('btn-ai-range-unit'),
   aiRangeStart: document.getElementById('ai-range-start'),
   aiRangeEnd: document.getElementById('ai-range-end'),
   aiRangeFromLabel: document.getElementById('ai-range-from-label'),
@@ -173,8 +171,8 @@ function init() {
 function wireEvents() {
   el.btnOpen.addEventListener('click', openFromDialog);
   el.btnOpenEmpty.addEventListener('click', openFromDialog);
-  el.btnClear.addEventListener('click', resetWorkspace);
-  el.btnTheme.addEventListener('click', toggleTheme);
+  if (el.btnClear) el.btnClear.addEventListener('click', resetWorkspace);
+  if (el.btnTheme) el.btnTheme.addEventListener('click', toggleTheme);
   el.btnDocs.addEventListener('click', addDocs);
   el.btnGuide.addEventListener('click', downloadUserGuide);
   el.btnAiFocus.addEventListener('click', toggleAiFocus);
@@ -193,7 +191,7 @@ function wireEvents() {
     }
   });
 
-  for (const item of [el.searchInput, el.searchField, el.caseSensitive, el.regexSearch, el.timeFrom, el.timeTo, el.markedOnly]) {
+  for (const item of [el.searchInput, el.timeFrom, el.timeTo].filter(Boolean)) {
     item.addEventListener('input', () => {
       state.currentPage = 1;
       state.levelFilter = null;
@@ -206,23 +204,28 @@ function wireEvents() {
     });
   }
 
-  el.pageSize.addEventListener('change', () => {
-    state.pageSize = el.pageSize.value;
-    state.currentPage = 1;
-    renderAll();
-  });
-  el.btnPrev.addEventListener('click', () => {
-    state.currentPage = Math.max(1, state.currentPage - 1);
-    renderAll();
-  });
-  el.btnNext.addEventListener('click', () => {
-    state.currentPage = Math.min(getTotalPages(), state.currentPage + 1);
-    renderAll();
-  });
+  if (el.pageSize) {
+    el.pageSize.addEventListener('change', () => {
+      state.pageSize = 'all';
+      state.currentPage = 1;
+      renderAll();
+    });
+  }
+  if (el.btnPrev) {
+    el.btnPrev.addEventListener('click', () => {
+      state.currentPage = Math.max(1, state.currentPage - 1);
+      renderAll();
+    });
+  }
+  if (el.btnNext) {
+    el.btnNext.addEventListener('click', () => {
+      state.currentPage = Math.min(getTotalPages(), state.currentPage + 1);
+      renderAll();
+    });
+  }
 
-  el.btnResetFilter.addEventListener('click', resetFilters);
+  if (el.btnResetFilter) el.btnResetFilter.addEventListener('click', resetFilters);
   el.btnExportCsv.addEventListener('click', () => exportFiltered('csv'));
-  el.btnExportJson.addEventListener('click', () => exportFiltered('json'));
   el.btnAiConfigUnlock.addEventListener('click', unlockAiConfig);
   el.btnAiConfigPasswordSubmit.addEventListener('click', submitAiConfigPassword);
   el.aiConfigPassword.addEventListener('keydown', (event) => {
@@ -234,15 +237,13 @@ function wireEvents() {
   el.btnSaveAi.addEventListener('click', saveAiConfig);
   el.btnNatural.addEventListener('click', runNaturalSearch);
 
-  el.virtualScroll.addEventListener('scroll', scheduleVirtualRows);
+  el.virtualScroll.addEventListener('scroll', handleVirtualScroll);
   el.rowsLayer.addEventListener('click', handleRowClick);
   el.timeline.addEventListener('click', handleTimelineClick);
   el.minimap.addEventListener('click', handleMinimapClick);
   el.btnFocusSearch.addEventListener('click', openFocusSearch);
   el.btnFocusSearchClose.addEventListener('click', closeFocusSearch);
-  el.btnLogScrollUp.addEventListener('click', () => scrollLogByRows(-24));
-  el.btnLogScrollDown.addEventListener('click', () => scrollLogByRows(24));
-  el.btnLogScrollEnd.addEventListener('click', scrollLogToEnd);
+  el.logScrollbar.addEventListener('pointerdown', handleLogScrollbarPointerDown);
   el.focusSearchInput.addEventListener('input', () => {
     el.searchInput.value = el.focusSearchInput.value;
     state.currentPage = 1;
@@ -257,12 +258,8 @@ function wireEvents() {
   el.filterRangeStart.addEventListener('input', (event) => handleFilterRangeInput(event, 'from'));
   el.filterRangeEnd.addEventListener('input', (event) => handleFilterRangeInput(event, 'to'));
   el.btnFilterRangeClear.addEventListener('click', () => resetFilterRange(true));
+  el.btnFilterRangeUnit.addEventListener('click', toggleFilterRangeUnit);
 
-  el.btnCopyPayload.addEventListener('click', copySelectedPayload);
-  el.btnBookmark.addEventListener('click', () => toggleBookmark(state.selectedId));
-  el.btnAnalyzeSelected.addEventListener('click', () => setAiChatMode('selection'));
-  el.btnCopyRange.addEventListener('click', copyRange);
-  el.btnAnalyzeRange.addEventListener('click', selectRangeForAi);
   el.btnAiChatSend.addEventListener('click', () => sendAiChat(state.aiChatMode));
   el.aiChatModeSelect.addEventListener('change', () => setAiChatMode(el.aiChatModeSelect.value));
   el.btnAiPrompt.addEventListener('click', toggleAiPromptPanel);
@@ -271,8 +268,8 @@ function wireEvents() {
     state.aiGuidance = el.aiGuidanceInput.value.trim();
     saveTextSetting('bltn-ai-guidance', state.aiGuidance);
   });
-  el.btnAiChatRangeSelected.addEventListener('click', selectRangeForAi);
   el.btnAiChatRangeClear.addEventListener('click', resetAiRangeToFull);
+  el.btnAiRangeUnit.addEventListener('click', toggleAiRangeUnit);
   el.aiRangeStart.addEventListener('input', (event) => handleAiRangeInput(event, 'from'));
   el.aiRangeEnd.addEventListener('input', (event) => handleAiRangeInput(event, 'to'));
   el.aiChatInput.addEventListener('keydown', (event) => {
@@ -333,14 +330,44 @@ function closeFocusSearch() {
   applyFilters();
 }
 
-function scrollLogByRows(rowDelta) {
-  el.virtualScroll.scrollTop = Math.max(0, el.virtualScroll.scrollTop + rowDelta * ROW_HEIGHT);
+function handleVirtualScroll() {
   scheduleVirtualRows();
+  updateLogScrollbar();
 }
 
-function scrollLogToEnd() {
-  el.virtualScroll.scrollTop = Math.max(0, el.virtualScroll.scrollHeight - el.virtualScroll.clientHeight);
-  scheduleVirtualRows();
+function handleLogScrollbarPointerDown(event) {
+  if (!state.filtered.length) return;
+  event.preventDefault();
+
+  const railRect = el.logScrollbar.getBoundingClientRect();
+  const thumbRect = el.logScrollbarThumb.getBoundingClientRect();
+  const scrollable = Math.max(0, el.virtualScroll.scrollHeight - el.virtualScroll.clientHeight);
+  const railScrollable = Math.max(1, railRect.height - thumbRect.height);
+  if (!scrollable) return;
+
+  const pointerOffset = event.target === el.logScrollbarThumb
+    ? event.clientY - thumbRect.top
+    : thumbRect.height / 2;
+
+  const moveTo = (clientY) => {
+    const top = clampNumber(clientY - railRect.top - pointerOffset, 0, railScrollable);
+    el.virtualScroll.scrollTop = (top / railScrollable) * scrollable;
+    scheduleVirtualRows();
+    updateLogScrollbar();
+  };
+
+  if (event.target !== el.logScrollbarThumb) {
+    moveTo(event.clientY);
+  }
+
+  const handleMove = (moveEvent) => moveTo(moveEvent.clientY);
+  const handleUp = () => {
+    window.removeEventListener('pointermove', handleMove);
+    window.removeEventListener('pointerup', handleUp);
+  };
+
+  window.addEventListener('pointermove', handleMove);
+  window.addEventListener('pointerup', handleUp, { once: true });
 }
 
 function toggleAiPromptPanel() {
@@ -457,21 +484,16 @@ function appendMessages(messages) {
 
 function applyFilters(render = true) {
   const matcher = buildTextMatcher();
-  const fromMs = resolveTimeInput(el.timeFrom.value, false);
-  const toMs = resolveTimeInput(el.timeTo.value, false);
-  const minTime = Number.isFinite(fromMs) ? fromMs : -Infinity;
-  const maxTime = Number.isFinite(toMs) ? toMs : Infinity;
-  const markedOnly = el.markedOnly.checked;
+  const activeRange = getActiveFilterRange();
   const levelFilter = state.levelFilter;
   const naturalFilter = state.naturalFilter;
 
   state.filtered = [];
   for (let index = 0; index < state.messages.length; index += 1) {
     const message = state.messages[index];
-    if (markedOnly && !state.bookmarks.has(message.id)) continue;
     if (levelFilter && levelFilter.size && !levelFilter.has(message.level)) continue;
     if (naturalFilter && !messageMatchesNaturalFilter(message, naturalFilter)) continue;
-    if (Number.isFinite(message.timeMs) && (message.timeMs < minTime || message.timeMs > maxTime)) continue;
+    if (activeRange && !messageWithinFilterRange(message, activeRange)) continue;
     if (matcher && !matcher(message)) continue;
     state.filtered.push(index);
   }
@@ -489,32 +511,53 @@ function buildTextMatcher() {
     return null;
   }
 
-  const field = el.searchField.value;
-  const caseSensitive = el.caseSensitive.checked;
-  const useRegex = el.regexSearch.checked;
-  let regex = null;
-  let needle = query;
-
-  if (useRegex) {
-    try {
-      regex = new RegExp(query, caseSensitive ? 'g' : 'gi');
-    } catch (error) {
-      el.parseStatus.textContent = `Invalid regex: ${error.message}`;
-      return () => false;
-    }
-  } else if (!caseSensitive) {
-    needle = query.toLowerCase();
-  }
+  const needle = normalizeSearchText(query);
+  const compactNeedle = compactSearchText(query);
 
   return (message) => {
-    const value = field === 'all' ? message.searchBlob : String(message[field] || '');
-    if (regex) {
-      regex.lastIndex = 0;
-      return regex.test(value);
-    }
-    const haystack = caseSensitive ? value : value.toLowerCase();
-    return haystack.includes(needle);
+    return buildSearchTargets(message).some((value) => {
+      const haystack = normalizeSearchText(value);
+      if (needle && haystack.includes(needle)) return true;
+      return Boolean(compactNeedle && compactSearchText(value).includes(compactNeedle));
+    });
   };
+}
+
+function buildSearchTargets(message) {
+  return [
+    message.id,
+    message.messageId,
+    message.time,
+    formatLogTime(message),
+    formatDelta(message.deltaMs),
+    message.length,
+    message.payload,
+    message.payloadAscii
+  ].map((value) => String(value ?? '')).filter(Boolean);
+}
+
+function compactSearchText(value) {
+  return normalizeSearchText(value).replace(/[^a-z0-9]+/g, '');
+}
+
+function getActiveFilterRange() {
+  if (!state.filterRange.dirty) return null;
+  const from = Number(state.filterRange.from);
+  const to = Number(state.filterRange.to);
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return null;
+  return {
+    unit: state.filterRange.unit || 'time',
+    from: Math.min(from, to),
+    to: Math.max(from, to)
+  };
+}
+
+function messageWithinFilterRange(message, range) {
+  if (range.unit === 'id') {
+    return Number(message.id) >= range.from && Number(message.id) <= range.to;
+  }
+  if (!Number.isFinite(message.timeMs)) return true;
+  return message.timeMs >= range.from && message.timeMs <= range.to;
 }
 
 function buildSearchBlob(message) {
@@ -535,9 +578,7 @@ function buildSearchBlob(message) {
 function hasActiveFilters() {
   return Boolean(
     el.searchInput.value.trim() ||
-    el.timeFrom.value.trim() ||
-    el.timeTo.value.trim() ||
-    el.markedOnly.checked ||
+    state.filterRange.dirty ||
     (state.levelFilter && state.levelFilter.size) ||
     Boolean(state.naturalFilter)
   );
@@ -546,10 +587,9 @@ function hasActiveFilters() {
 function resetFilters() {
   el.searchInput.value = '';
   resetFilterRange(false);
-  el.markedOnly.checked = false;
-  el.caseSensitive.checked = false;
-  el.regexSearch.checked = false;
-  el.searchField.value = 'all';
+  if (el.caseSensitive) el.caseSensitive.checked = false;
+  if (el.regexSearch) el.regexSearch.checked = false;
+  if (el.searchField) el.searchField.value = 'payload-time';
   state.levelFilter = null;
   state.naturalFilter = null;
   state.currentPage = 1;
@@ -598,9 +638,10 @@ function renderStats() {
 function renderPagination() {
   const totalPages = getTotalPages();
   state.currentPage = Math.min(Math.max(1, state.currentPage), totalPages);
+  if (!el.pageInfo) return;
   el.pageInfo.textContent = `Page ${state.currentPage}/${totalPages}`;
-  el.btnPrev.disabled = state.currentPage <= 1;
-  el.btnNext.disabled = state.currentPage >= totalPages;
+  if (el.btnPrev) el.btnPrev.disabled = state.currentPage <= 1;
+  if (el.btnNext) el.btnNext.disabled = state.currentPage >= totalPages;
 }
 
 function renderVirtualRows() {
@@ -624,6 +665,7 @@ function renderVirtualRows() {
   state.lastVirtualStart = start;
   state.lastVirtualEnd = end;
   state.lastVirtualCount = count;
+  updateLogScrollbar();
 }
 
 function scheduleVirtualRows() {
@@ -649,6 +691,27 @@ function renderRow(message, localIndex) {
       <div>${message.length || message.payloadLength || 0}</div>
     </div>
   `;
+}
+
+function updateLogScrollbar() {
+  if (!el.logScrollbar || !el.logScrollbarThumb) return;
+  const railHeight = el.logScrollbar.clientHeight || 1;
+  const scrollHeight = el.virtualScroll.scrollHeight || 1;
+  const clientHeight = el.virtualScroll.clientHeight || 1;
+  const scrollable = Math.max(0, scrollHeight - clientHeight);
+
+  if (!scrollable || !state.filtered.length) {
+    el.logScrollbar.classList.add('disabled');
+    el.logScrollbarThumb.style.height = `${Math.max(34, railHeight)}px`;
+    el.logScrollbarThumb.style.transform = 'translateY(0)';
+    return;
+  }
+
+  el.logScrollbar.classList.remove('disabled');
+  const thumbHeight = clampNumber((clientHeight / scrollHeight) * railHeight, 34, railHeight);
+  const top = (el.virtualScroll.scrollTop / scrollable) * Math.max(0, railHeight - thumbHeight);
+  el.logScrollbarThumb.style.height = `${thumbHeight}px`;
+  el.logScrollbarThumb.style.transform = `translateY(${top}px)`;
 }
 
 function formatLogTime(message) {
@@ -738,11 +801,6 @@ function handleRowClick(event) {
 function selectMessage(id, ensureVisible) {
   if (!Number.isFinite(id)) return;
   state.selectedId = id;
-  const message = getSelectedMessage();
-  if (message) {
-    el.rangeA.value = el.rangeA.value || String(message.id);
-    el.rangeB.value = String(message.id);
-  }
   if (ensureVisible) {
     scrollToMessage(id);
   }
@@ -971,14 +1029,19 @@ async function addDocs() {
 }
 
 async function downloadUserGuide() {
+  const readme = await api.getReadme();
+  if (!readme.ok) {
+    el.parseStatus.textContent = readme.error || 'README.md was not found.';
+    return;
+  }
   const result = await api.saveExport({
-    title: 'Download BLTN-Analysis Log user guide',
-    defaultPath: 'BLTN-Analysis-Log-User-Guide.md',
+    title: 'Download README',
+    defaultPath: readme.fileName || 'README.md',
     filters: [{ name: 'Markdown', extensions: ['md'] }],
-    content: buildUserGuideContent()
+    content: readme.content || ''
   });
   if (result.ok) {
-    el.parseStatus.textContent = `Saved user guide: ${result.filePath}`;
+    el.parseStatus.textContent = `Saved README: ${result.filePath}`;
   }
 }
 
@@ -1000,13 +1063,13 @@ function buildUserGuideContent() {
     '- Drag the header separators to resize columns.',
     '',
     '## 3. Search and filter',
-    '- The left panel has `Search / Filter` for payload, ECU/APID/CTID, file, regex, time range, or bookmarks.',
+    '- The left panel has `Search / Filter` for payload/time search, Time Range, ID Range, and AI Search.',
     '- In `Log AI Focus`, click the small `Search` button above the table for quick search.',
     '- `AI Search` converts a natural-language query into a local filter.',
     '',
     '## 4. AI Diagnostic Report',
-    '- Choose a mode beside `Send`: `Current Row`, `Time Range`, or `Potential Bug`.',
-    '- `Time Range` shows a two-handle slider for the log window sent to AI.',
+    '- Choose a mode beside `Send`: `Current line`, `Range`, `All current line`, or `Bug`.',
+    '- `Range` shows a two-handle slider for the log window sent to AI and can use time or message ID.',
     '- `Potential Bug` sends the full message context for whole-log analysis.',
     '- When `Send` is pressed, the button stays locked until AI returns a response or an error.',
     '- The app sends only `HH:mm:ss` time and `payload` to reduce tokens.',
@@ -1022,8 +1085,8 @@ function buildUserGuideContent() {
     '- `AI / RAG Config` is locked by default. Enter the team password to edit advanced settings.',
     '',
     '## 7. Export data',
-    '- Use `Export CSV` or `Export JSON` in Search / Filter to save currently filtered rows.',
-    '- Use `Copy Payload` in Message Detail to copy the selected row payload.',
+    '- Use `Export CSV` in Search / Filter to save currently filtered rows.',
+    '- Click a row to inspect its payload in Message Detail.',
     '',
     '## 8. Notes',
     '- Non-verbose DLT requires FIBEX/ARXML mapping for complete payload decoding.',
@@ -1066,7 +1129,7 @@ async function runAutoAiScan() {
     setAiStatus('Auto-scan did not find enough candidate messages to analyze.', true);
     renderAiObject('Auto Scan', {
       summary: 'No Error/Fatal/Warn or suspicious keywords were found in the log.',
-      recommended_action: 'Use Search or manually select an A-B time range.'
+      recommended_action: 'Use Search or manually select a time/ID range.'
     });
     return;
   }
@@ -1105,24 +1168,6 @@ async function analyzeSelected() {
     selectedIds: [message.id],
     fromMs: message.timeMs,
     toMs: message.timeMs,
-    stats: collectStats()
-  });
-}
-
-async function analyzeRange() {
-  const range = resolveRange();
-  if (!range) {
-    setAiStatus('Range A/B is invalid.', true);
-    return;
-  }
-  const context = buildLocalContext(range.fromMs, range.toMs, Number(el.aiWindow.value || 500), 1200);
-  await runAiAnalysis({
-    title: `Analyze range ${formatTimeLabel(range.fromMs)} -> ${formatTimeLabel(range.toMs)}`,
-    mode: 'time-range',
-    query: 'Analyze the A-B time range to find Built-in Cam ECU issues and root cause. Answer in the same language as the user question.',
-    messages: context,
-    fromMs: range.fromMs,
-    toMs: range.toMs,
     stats: collectStats()
   });
 }
@@ -1189,7 +1234,7 @@ async function sendAiChat(mode) {
 }
 
 function getAiChatMaxLogLines(mode, contextCount) {
-  if (mode === 'errors') {
+  if (mode === 'errors' || mode === 'filtered') {
     return Math.max(1, Number(contextCount || 0));
   }
   return Math.max(1, Number(state.aiConfig?.maxLogLines || 1400));
@@ -1200,7 +1245,13 @@ function resolveChatRange() {
   const from = Number(state.aiRange.from ?? el.aiRangeStart.value);
   const to = Number(state.aiRange.to ?? el.aiRangeEnd.value);
   if (!Number.isFinite(from) || !Number.isFinite(to)) return null;
-  return { fromMs: Math.min(from, to), toMs: Math.max(from, to) };
+  const unit = state.aiRange.unit || 'time';
+  const start = Math.min(from, to);
+  const end = Math.max(from, to);
+  if (unit === 'id') {
+    return { unit, fromId: start, toId: end };
+  }
+  return { unit, fromMs: start, toMs: end };
 }
 
 function updateChatRangeInfo() {
@@ -1220,12 +1271,18 @@ function updateChatRangeInfo() {
     el.aiChatRangeInfo.textContent = `${formatNumber(state.messages.length)} full-log messages`;
     return;
   }
-  const range = resolveChatRange();
-  if (!range) {
-    el.aiChatRangeInfo.textContent = 'No time range selected';
+  if (state.aiChatMode === 'filtered') {
+    el.aiChatRangeInfo.textContent = `${formatNumber(state.filtered.length)} messages after current filters`;
     return;
   }
-  const count = countMessagesInRange(range.fromMs, range.toMs);
+  const range = resolveChatRange();
+  if (!range) {
+    el.aiChatRangeInfo.textContent = 'No range selected';
+    return;
+  }
+  const count = range.unit === 'id'
+    ? countMessagesInIdRange(range.fromId, range.toId)
+    : countMessagesInRange(range.fromMs, range.toMs);
   el.aiChatRangeInfo.textContent = `${formatNumber(count)} messages in selected range`;
 }
 
@@ -1236,7 +1293,9 @@ function buildChatContextMessages(mode) {
   if (mode === 'range') {
     const chatRange = resolveChatRange();
     if (chatRange) {
-      return messagesInRange(chatRange.fromMs, chatRange.toMs);
+      return chatRange.unit === 'id'
+        ? messagesInIdRange(chatRange.fromId, chatRange.toId)
+        : messagesInRange(chatRange.fromMs, chatRange.toMs);
     }
     return [];
   }
@@ -1252,8 +1311,8 @@ function buildChatContextMessages(mode) {
     return state.messages.slice();
   }
 
-  if (mode === 'filtered' || state.filtered.length) {
-    return buildFilteredContextMessages(1200);
+  if (mode === 'filtered') {
+    return state.filtered.map((index) => state.messages[index]).filter(Boolean);
   }
 
   return state.messages.slice(0, Math.min(1200, state.messages.length));
@@ -1284,7 +1343,10 @@ function defaultChatQuestion(mode) {
     return 'Analyze the current log row and nearby messages. If this is a suspected bug, answer in 4 sections: whether it is a real issue, root cause, impact, and reproduction steps.';
   }
   if (mode === 'range') {
-    return 'Analyze the selected time range. If this is a suspected bug, answer in 4 sections: whether it is a real issue, root cause, impact, and reproduction steps.';
+    return 'Analyze the selected log range. If this is a suspected bug, answer in 4 sections: whether it is a real issue, root cause, impact, and reproduction steps.';
+  }
+  if (mode === 'filtered') {
+    return 'Analyze all messages currently visible after the active filters. Find the most important issue and answer in 4 sections: whether it is a real issue, root cause, impact, and reproduction steps.';
   }
   if (mode === 'errors') {
     return 'I suspect a potential bug. Scan the full timeline and payloads, find the most important issue, and answer in 4 sections: whether it is a real issue, root cause, impact, and reproduction steps.';
@@ -1294,7 +1356,11 @@ function defaultChatQuestion(mode) {
 
 function withHiddenAiInstructions(question, mode) {
   const range = mode === 'range' ? resolveChatRange() : null;
-  const rangeText = range ? `Range: ${formatTimeLabel(range.fromMs)} -> ${formatTimeLabel(range.toMs)}.` : '';
+  const rangeText = range
+    ? `Range: ${range.unit === 'id'
+      ? `${formatRangeValue('id', range.fromId)} -> ${formatRangeValue('id', range.toId)}`
+      : `${formatTimeLabel(range.fromMs)} -> ${formatTimeLabel(range.toMs)}`}.`
+    : '';
   const guidance = String(state.aiGuidance || '').trim();
   return [
     question,
@@ -1332,47 +1398,7 @@ function updateAiModeUi() {
 }
 
 function syncFilterRangeControls() {
-  if (!el.filterRangeStart || !el.filterRangeEnd) return;
-  if (!Number.isFinite(state.firstTimeMs) || !Number.isFinite(state.lastTimeMs)) {
-    el.filterRangeStart.disabled = true;
-    el.filterRangeEnd.disabled = true;
-    el.filterRangeStart.value = '0';
-    el.filterRangeEnd.value = '0';
-    el.filterRangeFromLabel.textContent = '-';
-    el.filterRangeToLabel.textContent = '-';
-    el.filterRangeSelection.style.left = '0%';
-    el.filterRangeSelection.style.width = '0%';
-    el.filterRangeLimits.textContent = 'No logs loaded';
-    el.timeFrom.value = '';
-    el.timeTo.value = '';
-    return;
-  }
-
-  const min = state.firstTimeMs;
-  const max = Math.max(min, state.lastTimeMs);
-  const boundsChanged = state.filterRange.min !== min || state.filterRange.max !== max;
-  state.filterRange.min = min;
-  state.filterRange.max = max;
-  if (boundsChanged || !state.filterRange.dirty || !Number.isFinite(state.filterRange.from) || !Number.isFinite(state.filterRange.to)) {
-    state.filterRange.from = min;
-    state.filterRange.to = max;
-  }
-
-  const step = getAiRangeStep(max - min);
-  for (const input of [el.filterRangeStart, el.filterRangeEnd]) {
-    input.min = String(min);
-    input.max = String(max);
-    input.step = String(step);
-    input.disabled = false;
-  }
-  state.filterRange.from = clampNumber(state.filterRange.from, min, max);
-  state.filterRange.to = clampNumber(state.filterRange.to, min, max);
-  if (state.filterRange.from > state.filterRange.to) {
-    const tmp = state.filterRange.from;
-    state.filterRange.from = state.filterRange.to;
-    state.filterRange.to = tmp;
-  }
-  applyFilterRangeValues();
+  syncRangeControls('filter');
 }
 
 function handleFilterRangeInput(_event, edge) {
@@ -1383,62 +1409,31 @@ function handleFilterRangeInput(_event, edge) {
   if (edge === 'to' && to < from) from = to;
   setFilterRange(from, to, true);
   state.currentPage = 1;
-  state.levelFilter = null;
-  state.naturalFilter = null;
   applyFilters();
 }
 
 function resetFilterRange(render = true) {
-  state.filterRange.dirty = false;
-  if (Number.isFinite(state.firstTimeMs) && Number.isFinite(state.lastTimeMs)) {
-    setFilterRange(state.firstTimeMs, state.lastTimeMs, false);
-  } else {
-    state.filterRange.from = null;
-    state.filterRange.to = null;
-    el.timeFrom.value = '';
-    el.timeTo.value = '';
-  }
+  resetRangeToFull('filter');
   if (render) {
     state.currentPage = 1;
     applyFilters();
   }
 }
 
-function setFilterRange(fromMs, toMs, dirty) {
-  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) return;
-  const min = Number.isFinite(state.filterRange.min) ? state.filterRange.min : Math.min(fromMs, toMs);
-  const max = Number.isFinite(state.filterRange.max) ? state.filterRange.max : Math.max(fromMs, toMs);
-  state.filterRange.from = clampNumber(Math.min(fromMs, toMs), min, max);
-  state.filterRange.to = clampNumber(Math.max(fromMs, toMs), min, max);
-  state.filterRange.dirty = Boolean(dirty);
-  applyFilterRangeValues();
+function setFilterRange(from, to, dirty) {
+  setRangeValues('filter', from, to, dirty);
 }
 
 function applyFilterRangeValues() {
-  const from = Number.isFinite(state.filterRange.from) ? state.filterRange.from : 0;
-  const to = Number.isFinite(state.filterRange.to) ? state.filterRange.to : from;
-  el.filterRangeStart.value = String(from);
-  el.filterRangeEnd.value = String(to);
-  el.filterRangeFromLabel.textContent = Number.isFinite(state.filterRange.from) ? formatTimeLabel(from) : '-';
-  el.filterRangeToLabel.textContent = Number.isFinite(state.filterRange.to) ? formatTimeLabel(to) : '-';
-  el.timeFrom.value = state.filterRange.dirty ? String(from) : '';
-  el.timeTo.value = state.filterRange.dirty ? String(to) : '';
-  if (Number.isFinite(state.filterRange.min) && Number.isFinite(state.filterRange.max)) {
-    const span = Math.max(1, state.filterRange.max - state.filterRange.min);
-    const left = ((Math.min(from, to) - state.filterRange.min) / span) * 100;
-    const width = ((Math.max(from, to) - Math.min(from, to)) / span) * 100;
-    el.filterRangeSelection.style.left = `${clampNumber(left, 0, 100)}%`;
-    el.filterRangeSelection.style.width = `${clampNumber(width, 0, 100)}%`;
-    el.filterRangeLimits.textContent = state.filterRange.dirty
-      ? `${formatHourTick(from)} -> ${formatHourTick(to)}`
-      : 'Full log';
-  }
+  applyRangeValues('filter');
 }
 
 function syncFilterRangeFromHiddenInputs() {
   const fromMs = resolveTimeInput(el.timeFrom.value, false);
   const toMs = resolveTimeInput(el.timeTo.value, false);
   if (Number.isFinite(fromMs) || Number.isFinite(toMs)) {
+    state.filterRange.unit = 'time';
+    clearRangeBounds('filter');
     const fallbackFrom = Number.isFinite(state.firstTimeMs) ? state.firstTimeMs : fromMs;
     const fallbackTo = Number.isFinite(state.lastTimeMs) ? state.lastTimeMs : toMs;
     setFilterRange(
@@ -1451,46 +1446,14 @@ function syncFilterRangeFromHiddenInputs() {
   }
 }
 
+function toggleFilterRangeUnit() {
+  toggleRangeUnit('filter');
+  state.currentPage = 1;
+  applyFilters();
+}
+
 function syncAiRangeControls() {
-  if (!el.aiRangeStart || !el.aiRangeEnd) return;
-  if (!Number.isFinite(state.firstTimeMs) || !Number.isFinite(state.lastTimeMs)) {
-    el.aiRangeStart.disabled = true;
-    el.aiRangeEnd.disabled = true;
-    el.aiRangeStart.value = '0';
-    el.aiRangeEnd.value = '0';
-    el.aiRangeFromLabel.textContent = '-';
-    el.aiRangeToLabel.textContent = '-';
-    el.aiRangeSelection.style.left = '0%';
-    el.aiRangeSelection.style.width = '0%';
-    el.aiRangeLimits.textContent = 'No logs loaded';
-    return;
-  }
-
-  const min = state.firstTimeMs;
-  const max = Math.max(min, state.lastTimeMs);
-  const boundsChanged = state.aiRange.min !== min || state.aiRange.max !== max;
-  state.aiRange.min = min;
-  state.aiRange.max = max;
-  if (boundsChanged || !state.aiRange.dirty || !Number.isFinite(state.aiRange.from) || !Number.isFinite(state.aiRange.to)) {
-    state.aiRange.from = min;
-    state.aiRange.to = max;
-  }
-
-  const step = getAiRangeStep(max - min);
-  for (const input of [el.aiRangeStart, el.aiRangeEnd]) {
-    input.min = String(min);
-    input.max = String(max);
-    input.step = String(step);
-    input.disabled = false;
-  }
-  state.aiRange.from = clampNumber(state.aiRange.from, min, max);
-  state.aiRange.to = clampNumber(state.aiRange.to, min, max);
-  if (state.aiRange.from > state.aiRange.to) {
-    const tmp = state.aiRange.from;
-    state.aiRange.from = state.aiRange.to;
-    state.aiRange.to = tmp;
-  }
-  applyAiRangeValues();
+  syncRangeControls('ai');
 }
 
 function handleAiRangeInput(_event, edge) {
@@ -1504,19 +1467,19 @@ function handleAiRangeInput(_event, edge) {
 }
 
 function resetAiRangeToFull(focus = true) {
-  if (!Number.isFinite(state.firstTimeMs) || !Number.isFinite(state.lastTimeMs)) return;
-  state.aiRange.dirty = false;
-  setAiRange(state.firstTimeMs, state.lastTimeMs, false);
+  if (!resetRangeToFull('ai')) return;
   setAiChatMode('range');
   if (focus) el.aiChatInput.focus();
 }
 
 function selectRangeForAi() {
-  const range = resolveRange() || selectedRange();
+  const range = selectedRange();
   if (!range) {
-    setAiStatus('Range A/B is invalid.', true);
+    setAiStatus('No row is selected for AI range.', true);
     return;
   }
+  state.aiRange.unit = 'time';
+  clearRangeBounds('ai');
   setAiRange(range.fromMs, range.toMs, true);
   setAiChatMode('range');
 }
@@ -1528,37 +1491,291 @@ function prepareRangePrompt(prompt) {
   }
 }
 
-function setAiRange(fromMs, toMs, dirty) {
-  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) return;
-  const min = Number.isFinite(state.aiRange.min) ? state.aiRange.min : Math.min(fromMs, toMs);
-  const max = Number.isFinite(state.aiRange.max) ? state.aiRange.max : Math.max(fromMs, toMs);
-  state.aiRange.from = clampNumber(Math.min(fromMs, toMs), min, max);
-  state.aiRange.to = clampNumber(Math.max(fromMs, toMs), min, max);
-  state.aiRange.dirty = Boolean(dirty);
-  applyAiRangeValues();
+function setAiRange(from, to, dirty) {
+  setRangeValues('ai', from, to, dirty);
   updateChatRangeInfo();
 }
 
 function applyAiRangeValues() {
-  const from = Number.isFinite(state.aiRange.from) ? state.aiRange.from : 0;
-  const to = Number.isFinite(state.aiRange.to) ? state.aiRange.to : from;
-  el.aiRangeStart.value = String(from);
-  el.aiRangeEnd.value = String(to);
-  el.aiChatFrom.value = String(from);
-  el.aiChatTo.value = String(to);
-  el.aiRangeFromLabel.textContent = formatTimeLabel(from);
-  el.aiRangeToLabel.textContent = formatTimeLabel(to);
-  if (Number.isFinite(state.aiRange.min) && Number.isFinite(state.aiRange.max)) {
-    const span = Math.max(1, state.aiRange.max - state.aiRange.min);
-    const left = ((Math.min(from, to) - state.aiRange.min) / span) * 100;
+  applyRangeValues('ai');
+}
+
+function toggleAiRangeUnit() {
+  toggleRangeUnit('ai');
+  setAiChatMode('range');
+}
+
+function syncRangeControls(kind) {
+  const range = getRangeState(kind);
+  const controls = getRangeControls(kind);
+  if (!range || !controls.start || !controls.end) return;
+
+  range.unit = range.unit || 'time';
+  syncRangeModeUi(kind);
+  const bounds = getRangeBounds(range.unit);
+  if (!bounds) {
+    controls.start.disabled = true;
+    controls.end.disabled = true;
+    controls.start.value = '0';
+    controls.end.value = '0';
+    controls.fromLabel.textContent = '-';
+    controls.toLabel.textContent = '-';
+    controls.selection.style.left = '0%';
+    controls.selection.style.width = '0%';
+    controls.limits.textContent = 'No logs loaded';
+    if (kind === 'filter') {
+      el.timeFrom.value = '';
+      el.timeTo.value = '';
+    }
+    return;
+  }
+
+  const boundsChanged = range.min !== bounds.min || range.max !== bounds.max;
+  range.min = bounds.min;
+  range.max = bounds.max;
+  if (boundsChanged || !range.dirty || !Number.isFinite(range.from) || !Number.isFinite(range.to)) {
+    range.from = bounds.min;
+    range.to = bounds.max;
+  }
+
+  const step = getRangeStep(range.unit, bounds.max - bounds.min);
+  for (const input of [controls.start, controls.end]) {
+    input.min = String(bounds.min);
+    input.max = String(bounds.max);
+    input.step = String(step);
+    input.disabled = false;
+  }
+  normalizeRangeValues(range);
+  applyRangeValues(kind);
+}
+
+function resetRangeToFull(kind) {
+  const range = getRangeState(kind);
+  if (!range) return false;
+  range.dirty = false;
+  const bounds = getRangeBounds(range.unit || 'time');
+  if (!bounds) {
+    range.from = null;
+    range.to = null;
+    applyRangeValues(kind);
+    return false;
+  }
+  setRangeValues(kind, bounds.min, bounds.max, false);
+  return true;
+}
+
+function setRangeValues(kind, from, to, dirty) {
+  const range = getRangeState(kind);
+  if (!range || !Number.isFinite(from) || !Number.isFinite(to)) return;
+  range.unit = range.unit || 'time';
+  const bounds = getRangeBounds(range.unit) || {
+    min: Math.min(from, to),
+    max: Math.max(from, to)
+  };
+  range.min = bounds.min;
+  range.max = bounds.max;
+  range.from = clampNumber(Math.min(from, to), bounds.min, bounds.max);
+  range.to = clampNumber(Math.max(from, to), bounds.min, bounds.max);
+  range.dirty = Boolean(dirty);
+  normalizeRangeValues(range);
+  applyRangeValues(kind);
+}
+
+function applyRangeValues(kind) {
+  const range = getRangeState(kind);
+  const controls = getRangeControls(kind);
+  if (!range || !controls.start || !controls.end) return;
+
+  syncRangeModeUi(kind);
+  const from = Number.isFinite(range.from) ? range.from : 0;
+  const to = Number.isFinite(range.to) ? range.to : from;
+  controls.start.value = String(from);
+  controls.end.value = String(to);
+  controls.fromLabel.textContent = Number.isFinite(range.from) ? formatRangeValue(range.unit, from) : '-';
+  controls.toLabel.textContent = Number.isFinite(range.to) ? formatRangeValue(range.unit, to) : '-';
+
+  if (kind === 'filter') {
+    el.timeFrom.value = range.dirty && range.unit === 'time' ? String(from) : '';
+    el.timeTo.value = range.dirty && range.unit === 'time' ? String(to) : '';
+  } else {
+    el.aiChatFrom.value = String(from);
+    el.aiChatTo.value = String(to);
+  }
+
+  if (Number.isFinite(range.min) && Number.isFinite(range.max)) {
+    const span = Math.max(1, range.max - range.min);
+    const left = ((Math.min(from, to) - range.min) / span) * 100;
     const width = ((Math.max(from, to) - Math.min(from, to)) / span) * 100;
-    el.aiRangeSelection.style.left = `${clampNumber(left, 0, 100)}%`;
-    el.aiRangeSelection.style.width = `${clampNumber(width, 0, 100)}%`;
-    el.aiRangeLimits.textContent = `${formatHourTick(state.aiRange.min)} -> ${formatHourTick(state.aiRange.max)}`;
+    controls.selection.style.left = `${clampNumber(left, 0, 100)}%`;
+    controls.selection.style.width = `${clampNumber(width, 0, 100)}%`;
+    controls.limits.textContent = kind === 'filter'
+      ? (range.dirty ? `${formatRangeShortValue(range.unit, from)} -> ${formatRangeShortValue(range.unit, to)}` : 'Full log')
+      : `${formatRangeShortValue(range.unit, range.min)} -> ${formatRangeShortValue(range.unit, range.max)}`;
   }
 }
 
-function getAiRangeStep(spanMs) {
+function toggleRangeUnit(kind) {
+  const range = getRangeState(kind);
+  if (!range) return;
+  const previousUnit = range.unit || 'time';
+  const nextUnit = previousUnit === 'time' ? 'id' : 'time';
+  const previous = {
+    from: range.from,
+    to: range.to,
+    dirty: range.dirty
+  };
+  range.unit = nextUnit;
+  clearRangeBounds(kind);
+
+  const bounds = getRangeBounds(nextUnit);
+  if (!bounds) {
+    range.from = null;
+    range.to = null;
+    range.dirty = false;
+    syncRangeControls(kind);
+    return;
+  }
+
+  const converted = previous.dirty
+    ? convertRangeValues(previousUnit, nextUnit, previous.from, previous.to, bounds)
+    : bounds;
+  range.from = converted.from;
+  range.to = converted.to;
+  range.dirty = previous.dirty;
+  syncRangeControls(kind);
+}
+
+function clearRangeBounds(kind) {
+  const range = getRangeState(kind);
+  if (!range) return;
+  range.min = null;
+  range.max = null;
+}
+
+function normalizeRangeValues(range) {
+  if (!range || !Number.isFinite(range.min) || !Number.isFinite(range.max)) return;
+  range.from = clampNumber(range.from, range.min, range.max);
+  range.to = clampNumber(range.to, range.min, range.max);
+  if (range.from > range.to) {
+    const tmp = range.from;
+    range.from = range.to;
+    range.to = tmp;
+  }
+}
+
+function convertRangeValues(fromUnit, toUnit, from, to, fallbackBounds) {
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return fallbackBounds;
+  const start = Math.min(from, to);
+  const end = Math.max(from, to);
+
+  if (fromUnit === 'time' && toUnit === 'id') {
+    const selected = state.messages.filter((message) => (
+      Number.isFinite(message.timeMs) &&
+      message.timeMs >= start &&
+      message.timeMs <= end
+    ));
+    if (selected.length) {
+      return {
+        from: selected[0].id,
+        to: selected[selected.length - 1].id
+      };
+    }
+  }
+
+  if (fromUnit === 'id' && toUnit === 'time') {
+    const selected = state.messages.filter((message) => (
+      Number(message.id) >= start &&
+      Number(message.id) <= end &&
+      Number.isFinite(message.timeMs)
+    ));
+    if (selected.length) {
+      return {
+        from: selected[0].timeMs,
+        to: selected[selected.length - 1].timeMs
+      };
+    }
+  }
+
+  return fallbackBounds;
+}
+
+function getRangeState(kind) {
+  return kind === 'filter' ? state.filterRange : state.aiRange;
+}
+
+function getRangeControls(kind) {
+  if (kind === 'filter') {
+    return {
+      title: el.filterRangeTitle,
+      button: el.btnFilterRangeUnit,
+      start: el.filterRangeStart,
+      end: el.filterRangeEnd,
+      selection: el.filterRangeSelection,
+      fromLabel: el.filterRangeFromLabel,
+      toLabel: el.filterRangeToLabel,
+      limits: el.filterRangeLimits
+    };
+  }
+  return {
+    title: el.aiRangeTitle,
+    button: el.btnAiRangeUnit,
+    start: el.aiRangeStart,
+    end: el.aiRangeEnd,
+    selection: el.aiRangeSelection,
+    fromLabel: el.aiRangeFromLabel,
+    toLabel: el.aiRangeToLabel,
+    limits: el.aiRangeLimits
+  };
+}
+
+function getRangeBounds(unit) {
+  if (!state.messages.length) return null;
+  if (unit === 'id') {
+    let min = Infinity;
+    let max = -Infinity;
+    for (const message of state.messages) {
+      const id = Number(message.id);
+      if (!Number.isFinite(id)) continue;
+      min = Math.min(min, id);
+      max = Math.max(max, id);
+    }
+    if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+    return { min, max };
+  }
+  if (!Number.isFinite(state.firstTimeMs) || !Number.isFinite(state.lastTimeMs)) return null;
+  const min = state.firstTimeMs;
+  const max = Math.max(min, state.lastTimeMs);
+  return { min, max };
+}
+
+function syncRangeModeUi(kind) {
+  const range = getRangeState(kind);
+  const controls = getRangeControls(kind);
+  if (!range || !controls.title || !controls.button) return;
+  const unit = range.unit || 'time';
+  controls.title.textContent = kind === 'filter'
+    ? (unit === 'id' ? 'ID Range' : 'Time Range')
+    : (unit === 'id' ? 'AI ID range' : 'AI time range');
+  controls.button.textContent = unit === 'id' ? 'Use Time' : 'Use ID';
+  controls.button.classList.toggle('active', unit === 'id');
+}
+
+function formatRangeValue(unit, value) {
+  if (!Number.isFinite(value)) return '-';
+  return unit === 'id' ? `#${Math.round(value)}` : formatTimeLabel(value);
+}
+
+function formatRangeShortValue(unit, value) {
+  if (!Number.isFinite(value)) return '-';
+  return unit === 'id' ? `#${Math.round(value)}` : formatHourTick(value);
+}
+
+function getRangeStep(unit, span) {
+  if (unit === 'id') return 1;
+  return getTimeRangeStep(span);
+}
+
+function getTimeRangeStep(spanMs) {
   if (spanMs > 24 * 60 * 60 * 1000) return 60 * 1000;
   if (spanMs > 60 * 60 * 1000) return 1000;
   if (spanMs > 60 * 1000) return 100;
@@ -1571,12 +1788,28 @@ function messagesInRange(fromMs, toMs) {
   return state.messages.filter((message) => Number.isFinite(message.timeMs) && message.timeMs >= start && message.timeMs <= end);
 }
 
+function messagesInIdRange(fromId, toId) {
+  const start = Math.min(fromId, toId);
+  const end = Math.max(fromId, toId);
+  return state.messages.filter((message) => Number(message.id) >= start && Number(message.id) <= end);
+}
+
 function countMessagesInRange(fromMs, toMs) {
   let count = 0;
   const start = Math.min(fromMs, toMs);
   const end = Math.max(fromMs, toMs);
   for (const message of state.messages) {
     if (Number.isFinite(message.timeMs) && message.timeMs >= start && message.timeMs <= end) count += 1;
+  }
+  return count;
+}
+
+function countMessagesInIdRange(fromId, toId) {
+  let count = 0;
+  const start = Math.min(fromId, toId);
+  const end = Math.max(fromId, toId);
+  for (const message of state.messages) {
+    if (Number(message.id) >= start && Number(message.id) <= end) count += 1;
   }
   return count;
 }
@@ -1699,12 +1932,12 @@ function enrichAiResult(result, requestPayload) {
   if (isSparseFallbackField(next.recommended_action, 'recommendation')) {
     next.recommended_action = ids.length
       ? `Inspect messages #${ids.slice(0, 12).join(', ')} on the timeline, expand the analysis window to 2000-5000 ms if the issue spans longer, then compare with ECU/FIBEX/ARXML documentation.`
-      : 'Expand the A-B time range around the suspicious area, check consecutive warnings/errors, and load FIBEX/ARXML if the log is non-verbose.';
+      : 'Expand the time/ID range around the suspicious area, check consecutive warnings/errors, and load FIBEX/ARXML if the log is non-verbose.';
   }
 
   if (!Array.isArray(next.next_steps) || !next.next_steps.length) {
     next.next_steps = [
-      'Expand context around the issue and rerun A-B AI analysis.',
+      'Expand context around the issue and rerun AI range analysis.',
       'Inspect bookmarked/highlighted messages on the timeline.',
       'Load FIBEX/ARXML if non-verbose payloads are not decoded.'
     ];
@@ -1754,9 +1987,9 @@ function applyNaturalSearchPlan(plan, source, errorMessage = '') {
   state.currentPage = 1;
 
   el.searchInput.value = safePlan.displayQuery;
-  el.searchField.value = 'all';
-  el.caseSensitive.checked = false;
-  el.regexSearch.checked = false;
+  if (el.searchField) el.searchField.value = 'payload-time';
+  if (el.caseSensitive) el.caseSensitive.checked = false;
+  if (el.regexSearch) el.regexSearch.checked = false;
 
   if (safePlan.from_time) el.timeFrom.value = safePlan.from_time;
   if (safePlan.to_time) el.timeTo.value = safePlan.to_time;
@@ -1782,10 +2015,10 @@ function applyNaturalSearchPlan(plan, source, errorMessage = '') {
     relaxed_by: relaxedBy,
     error: errorMessage || ''
   };
-  renderAiObject('Natural Search', report);
   const prefix = source === 'ai' ? 'Applied AI Search' : 'Applied smart local search';
   const suffix = errorMessage ? ` Fallback reason: ${errorMessage}` : '';
-  setAiStatus(`${prefix}: found ${formatNumber(state.filtered.length)} row(s).${suffix}`, state.filtered.length === 0);
+  const detail = report.relaxed_by ? ` ${report.relaxed_by}` : '';
+  setAiStatus(`${prefix}: found ${formatNumber(state.filtered.length)} row(s).${suffix}${detail}`, state.filtered.length === 0);
 }
 
 function buildNaturalSearchPlan(query) {
@@ -2092,7 +2325,7 @@ const NATURAL_CONCEPTS = [
 ];
 
 async function generateSequence() {
-  const range = resolveRange() || selectedRange();
+  const range = selectedRange();
   if (!range) return;
   const context = buildLocalContext(range.fromMs, range.toMs, Number(el.aiWindow.value || 500), 500);
   setAiStatus('AI is generating a sequence diagram...', false);
@@ -2112,7 +2345,7 @@ async function generateSequence() {
 }
 
 async function generateScript() {
-  const range = resolveRange() || selectedRange();
+  const range = selectedRange();
   if (!range) return;
   const context = buildLocalContext(range.fromMs, range.toMs, Number(el.aiWindow.value || 500), 700);
   setAiStatus('AI is generating a reproduction script...', false);
@@ -2240,13 +2473,6 @@ function buildLocalContext(fromMs, toMs, windowMs, maxLines) {
   return Array.from(selected.values()).sort((a, b) => a.id - b.id).slice(0, maxLines);
 }
 
-function resolveRange() {
-  const a = resolveTimeInput(el.rangeA.value, true);
-  const b = resolveTimeInput(el.rangeB.value, true);
-  if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
-  return { fromMs: Math.min(a, b), toMs: Math.max(a, b) };
-}
-
 function selectedRange() {
   const message = getSelectedMessage();
   if (!message) return null;
@@ -2273,22 +2499,6 @@ function resolveTimeInput(value, allowId) {
 
   const parsed = Date.parse(raw.replace(/\//g, '-'));
   return Number.isFinite(parsed) ? parsed : NaN;
-}
-
-function copySelectedPayload() {
-  const message = getSelectedMessage();
-  if (message) api.writeClipboard(message.payload || '');
-}
-
-function copyRange() {
-  const range = resolveRange();
-  if (!range) {
-    setAiStatus('Range A/B is invalid.', true);
-    return;
-  }
-  const messages = state.messages.filter((message) => message.timeMs >= range.fromMs && message.timeMs <= range.toMs);
-  api.writeClipboard(JSON.stringify(messages, null, 2));
-  setAiStatus(`Copied ${formatNumber(messages.length)} messages from range A-B.`, false);
 }
 
 async function exportFiltered(kind) {
@@ -2433,8 +2643,9 @@ function collectAiStats(mode, contextMessages) {
     timeSpanMs: state.firstTimeMs !== null && state.lastTimeMs !== null ? state.lastTimeMs - state.firstTimeMs : 0,
     selectedId: state.selectedId,
     selectedRange: range ? {
-      from: formatTimeLabel(range.fromMs),
-      to: formatTimeLabel(range.toMs)
+      unit: range.unit,
+      from: range.unit === 'id' ? formatRangeValue('id', range.fromId) : formatTimeLabel(range.fromMs),
+      to: range.unit === 'id' ? formatRangeValue('id', range.toId) : formatTimeLabel(range.toMs)
     } : null,
     levels
   };
@@ -2466,6 +2677,7 @@ function clearData() {
   state.parseDone = false;
   state.aiChatMode = 'selection';
   state.aiRange = {
+    unit: 'time',
     min: null,
     max: null,
     from: null,
@@ -2473,6 +2685,7 @@ function clearData() {
     dirty: false
   };
   state.filterRange = {
+    unit: 'time',
     min: null,
     max: null,
     from: null,
@@ -2486,7 +2699,7 @@ function clearData() {
 
 function toggleTheme() {
   const light = el.app.classList.toggle('theme-light');
-  el.btnTheme.textContent = light ? 'Dark' : 'Light';
+  if (el.btnTheme) el.btnTheme.textContent = light ? 'Dark' : 'Light';
   scheduleRender();
 }
 
@@ -2506,8 +2719,8 @@ function setupCanvas(canvas) {
 function highlightSearch(value) {
   const text = String(value || '');
   const query = el.searchInput.value.trim();
-  if (!query || el.regexSearch.checked) return escapeHtml(text);
-  const flags = el.caseSensitive.checked ? 'g' : 'gi';
+  if (!query) return escapeHtml(text);
+  const flags = 'gi';
   const safe = escapeRegExp(query);
   return escapeHtml(text).replace(new RegExp(safe, flags), (match) => `<mark>${match}</mark>`);
 }

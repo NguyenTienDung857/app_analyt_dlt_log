@@ -39,6 +39,8 @@ function createWindow() {
     }
   });
 
+  mainWindow.setMenuBarVisibility(false);
+  mainWindow.setAutoHideMenuBar(true);
   mainWindow.loadFile(path.join(APP_ROOT, 'index.html'));
 }
 
@@ -212,6 +214,19 @@ ipcMain.handle('export:save', async (_event, payload) => {
   }
   await writeExportFile(result.filePath, payload.content || '');
   return { ok: true, filePath: result.filePath };
+});
+
+ipcMain.handle('app:read-readme', async () => {
+  const candidates = ['README.md', 'Readme.md', 'readme.md'].map((fileName) => path.join(APP_ROOT, fileName));
+  const readmePath = candidates.find((candidate) => fs.existsSync(candidate));
+  if (!readmePath) {
+    return { ok: false, error: 'README.md was not found in the project folder.' };
+  }
+  return {
+    ok: true,
+    fileName: path.basename(readmePath),
+    content: fs.readFileSync(readmePath, 'utf8')
+  };
 });
 
 ipcMain.handle('clipboard:write', async (_event, text) => {

@@ -18,11 +18,9 @@
       </div>
       <div class="top-actions">
         <button id="btn-open" class="btn primary">Open DLT</button>
+        <button id="btn-ai-focus" class="btn">Log AI Focus</button>
         <button id="btn-docs" class="btn">Add ECU Docs</button>
         <button id="btn-guide" class="btn">Download Guide</button>
-        <button id="btn-ai-focus" class="btn">Log AI Focus</button>
-        <button id="btn-theme" class="btn">Light</button>
-        <button id="btn-clear" class="btn danger">Reset x</button>
       </div>
     </header>
 
@@ -30,7 +28,7 @@
       <div class="drop-card">
         <div class="drop-orbit"></div>
         <h2>Drop .dlt, .log, or .bin files here</h2>
-        <p>Multiple files are supported. Logs are parsed in a worker and rendered with virtual scrolling.</p>
+        <p>Multiple files are supported. Logs are parsed in a worker and shown as one scrollable timeline.</p>
         <button id="btn-open-empty" class="btn primary large">Browse Files</button>
         <p class="hint">AI context is built from selected time windows and local ECU documentation, not the whole log.</p>
       </div>
@@ -42,46 +40,17 @@
           <div class="section-title">Message Detail</div>
           <div id="detail-empty" class="empty-state">Select a row to inspect file, timestamp, counter, and payload.</div>
           <div id="detail-panel" class="detail-panel hidden"></div>
-          <div class="button-grid detail-actions compact-action-row">
-            <button id="btn-copy-payload" class="btn">Copy Payload</button>
-            <button id="btn-bookmark" class="btn">Bookmark</button>
-            <button id="btn-analyze-selected" class="btn primary">Use Current Row</button>
-          </div>
         </section>
 
         <section id="search-panel" class="command-strip">
           <div class="section-title">Search / Filter</div>
           <div class="search-group">
-            <input id="search-input" class="input search" placeholder="Search payload, ECU/APID/CTID, level, type, file... (F)">
-            <div class="search-options-row">
-              <select id="search-field" class="select compact-select">
-                <option value="all">All fields</option>
-                <option value="payload">Payload</option>
-                <option value="ecu">ECU</option>
-                <option value="apid">APID</option>
-                <option value="ctid">CTID</option>
-                <option value="level">Level</option>
-                <option value="type">Type</option>
-                <option value="fileName">File</option>
-              </select>
-              <label><input id="case-sensitive" type="checkbox"> Case</label>
-              <label><input id="regex-search" type="checkbox"> Regex</label>
-            </div>
+            <input id="search-input" class="input search" placeholder="Search payload or time... (F)">
           </div>
 
           <div class="filter-row">
             <input id="natural-query" class="input natural" placeholder="Natural language search, e.g. camera drops FPS after temp > 80">
             <button id="btn-natural" class="btn">AI Search</button>
-            <select id="page-size" class="select">
-              <option value="all" selected>Full virtual</option>
-              <option value="100">100 rows</option>
-              <option value="250">250 rows</option>
-              <option value="500">500 rows</option>
-              <option value="1000">1000 rows</option>
-            </select>
-            <button id="btn-prev" class="btn">Prev</button>
-            <span id="page-info" class="page-info">Page 1/1</span>
-            <button id="btn-next" class="btn">Next</button>
           </div>
 
           <div class="filter-row compact">
@@ -89,7 +58,8 @@
             <input id="time-to" type="hidden">
             <div id="filter-time-range-panel" class="left-time-range-panel">
               <div class="range-head compact-range-head">
-                <span>Time Range</span>
+                <span id="filter-range-title">Time Range</span>
+                <button id="btn-filter-range-unit" class="btn small range-unit-toggle" type="button">Use ID</button>
                 <span id="filter-range-limits">No logs loaded</span>
               </div>
               <div class="dual-range compact-dual-range">
@@ -104,21 +74,17 @@
                 <span id="filter-range-to-label">-</span>
               </div>
             </div>
-            <label><input id="marked-only" type="checkbox"> Marked</label>
-            <button id="btn-reset-filter" class="btn">Reset Filter</button>
-            <button id="btn-export-csv" class="btn">Export CSV</button>
-            <button id="btn-export-json" class="btn">Export JSON</button>
+            <div class="filter-action-row">
+              <button id="btn-export-csv" class="btn small">Export CSV</button>
+            </div>
           </div>
         </section>
 
-        <section class="file-panel compact-session">
-          <div class="section-title">Session</div>
-          <div class="session-strip">
-            <div id="file-list" class="file-list compact"></div>
-            <div id="parse-status" class="parse-status compact">Idle</div>
-            <div class="progress-track session-progress"><div id="parse-progress" class="progress-fill"></div></div>
-          </div>
-        </section>
+        <div class="hidden">
+          <div id="file-list"></div>
+          <div id="parse-status">Idle</div>
+          <div><div id="parse-progress"></div></div>
+        </div>
 
         <section class="stats-grid">
           <div class="stat-card"><span>Total</span><strong id="stat-total">0</strong></div>
@@ -127,18 +93,6 @@
           <div class="stat-card warn"><span>Warning</span><strong id="stat-warns">0</strong></div>
           <div class="stat-card"><span>ECU</span><strong id="stat-ecu">0</strong></div>
           <div class="stat-card"><span>Span</span><strong id="stat-span">-</strong></div>
-        </section>
-
-        <section>
-          <div class="section-title">Range Tools</div>
-          <label class="field-label">Range A</label>
-          <input id="range-a" class="input" placeholder="time, ms, or selected id">
-          <label class="field-label">Range B</label>
-          <input id="range-b" class="input" placeholder="time, ms, or selected id">
-          <div class="button-grid">
-            <button id="btn-copy-range" class="btn">Copy A-B</button>
-            <button id="btn-analyze-range" class="btn primary">Use A-B</button>
-          </div>
         </section>
 
         <section id="ai-config-panel" class="ai-config-panel locked">
@@ -186,13 +140,7 @@
               <input id="focus-search-input" class="input focus-search-input hidden" placeholder="Quick search in logs...">
               <button id="btn-focus-search-close" class="btn small hidden">x</button>
             </div>
-            <div class="log-scroll-actions">
-              <button id="btn-log-scroll-up" class="btn small" type="button">Up</button>
-              <button id="btn-log-scroll-down" class="btn small" type="button">Down</button>
-              <button id="btn-log-scroll-end" class="btn small" type="button">End</button>
-            </div>
             <div class="log-header log-grid">
-              <div>Mark</div>
               <div>#</div>
             <div><label class="time-toggle"><input id="show-full-time" type="checkbox"> Time</label></div>
             <div>Delta</div>
@@ -203,6 +151,9 @@
             <div id="virtual-scroll" class="virtual-scroll">
               <div id="virtual-spacer"></div>
               <div id="rows-layer" class="rows-layer"></div>
+            </div>
+            <div id="log-scrollbar" class="log-scrollbar" title="Drag to scroll log">
+              <div id="log-scrollbar-thumb" class="log-scrollbar-thumb"></div>
             </div>
             <canvas id="minimap" class="minimap" width="18"></canvas>
           </div>
@@ -216,7 +167,8 @@
             <input id="ai-chat-from" type="hidden">
             <input id="ai-chat-to" type="hidden">
             <div class="range-head">
-              <span>AI time range</span>
+              <span id="ai-range-title">AI time range</span>
+              <button id="btn-ai-range-unit" class="btn small range-unit-toggle" type="button">Use ID</button>
               <span id="ai-range-limits">No logs loaded</span>
             </div>
             <div class="dual-range">
@@ -227,7 +179,6 @@
             </div>
             <div class="range-footer">
               <span id="ai-range-from-label">-</span>
-              <button id="btn-ai-chat-range-selected" class="btn small" title="Use Range A/B from the left panel">Use A-B</button>
               <button id="btn-ai-chat-range-clear" class="btn small">Full Log</button>
               <span id="ai-range-to-label">-</span>
             </div>
@@ -266,8 +217,9 @@
               <textarea id="ai-chat-input" class="textarea ai-chat-input" placeholder="Type a diagnostic question or suspected issue..." spellcheck="false"></textarea>
               <div class="ai-chat-actions">
                 <select id="ai-chat-mode-select" class="select ai-mode-select">
-                  <option value="selection">Current</option>
+                  <option value="selection">Current line</option>
                   <option value="range">Range</option>
+                  <option value="filtered">All current line</option>
                   <option value="errors">Bug</option>
                 </select>
                 <button id="btn-ai-chat-send" class="btn primary">Send</button>
