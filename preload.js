@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('nexusApi', {
 
   saveExport: (payload) => ipcRenderer.invoke('export:save', payload),
   getReadme: () => ipcRenderer.invoke('app:read-readme'),
+  getUserGuide: () => ipcRenderer.invoke('app:read-user-guide'),
   writeClipboard: (text) => ipcRenderer.invoke('clipboard:write', text),
 
   getAiConfig: () => ipcRenderer.invoke('ai:get-config'),

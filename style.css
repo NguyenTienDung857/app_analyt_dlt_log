@@ -18,7 +18,7 @@
   --info: #65b5ff;
   --debug: #a9d18e;
   --shadow: rgba(0, 0, 0, 0.32);
-  --row: 32px;
+  --row: 34px;
 }
 
 .theme-light {
@@ -169,6 +169,18 @@ textarea {
   border-color: transparent;
   background: linear-gradient(135deg, var(--accent), var(--accent-2));
   font-weight: 700;
+}
+
+#btn-natural {
+  border-color: rgba(57, 217, 138, 0.42);
+  color: #d8fff0;
+  background: linear-gradient(135deg, #075936, #06483d);
+  font-weight: 800;
+}
+
+#btn-natural:disabled {
+  color: rgba(216, 255, 240, 0.72);
+  background: linear-gradient(135deg, #064028, #06342e);
 }
 
 .btn.danger {
@@ -1161,9 +1173,22 @@ textarea {
 }
 
 .theme-light .minimap,
-.theme-light .log-scrollbar,
 .theme-light .dual-range-track {
   background-color: rgba(8, 125, 76, 0.08);
+}
+
+.theme-light .log-scrollbar {
+  border-left-color: rgba(8, 125, 76, 0.2);
+  background: transparent;
+}
+
+.theme-light .log-scrollbar::before {
+  background: rgba(8, 125, 76, 0.14);
+}
+
+.theme-light .log-scrollbar-thumb {
+  background: #087d4c;
+  box-shadow: 0 0 3px rgba(8, 125, 76, 0.28);
 }
 
 .input,
@@ -1298,16 +1323,16 @@ textarea {
 .log-body {
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 10px 18px;
+  grid-template-columns: minmax(0, 1fr) 8px 18px;
 }
 
 .workspace.log-ai-focus .log-body {
-  grid-template-columns: minmax(0, 1fr) 10px 24px;
+  grid-template-columns: minmax(0, 1fr) 8px 24px;
 }
 
 .log-grid {
   display: grid;
-  grid-template-columns: var(--log-grid-columns, 46px 66px 108px 82px minmax(640px, 1fr) 58px);
+  grid-template-columns: var(--log-grid-columns, 66px 108px 76px minmax(0, 1fr));
   gap: 0;
 }
 
@@ -1380,24 +1405,22 @@ textarea {
   min-height: 0;
   min-width: 0;
   overflow-y: scroll;
-  overflow-x: auto;
+  overflow-x: hidden;
   position: relative;
   font-family: var(--font-mono);
   font-size: 12px;
   scrollbar-color: rgba(57, 217, 138, 0.72) transparent;
   scrollbar-width: none;
-  border-right: 1px solid rgba(57, 217, 138, 0.22);
+  border-right: 0;
 }
 
 .log-scrollbar {
   position: relative;
   height: 100%;
-  width: 10px;
-  border-left: 1px solid rgba(57, 217, 138, 0.5);
-  border-right: 1px solid rgba(57, 217, 138, 0.18);
-  background:
-    linear-gradient(180deg, rgba(57, 217, 138, 0.22), rgba(0, 184, 169, 0.1)),
-    rgba(255, 255, 255, 0.07);
+  width: 8px;
+  border-left: 1px solid rgba(57, 217, 138, 0.24);
+  border-right: 0;
+  background: transparent;
   cursor: pointer;
   touch-action: none;
 }
@@ -1407,10 +1430,10 @@ textarea {
   position: absolute;
   top: 6px;
   bottom: 6px;
-  left: 4px;
-  width: 2px;
+  left: 3px;
+  width: 1px;
   border-radius: 999px;
-  background: rgba(237, 247, 242, 0.16);
+  background: rgba(237, 247, 242, 0.12);
 }
 
 .log-scrollbar-thumb {
@@ -1418,10 +1441,10 @@ textarea {
   top: 0;
   left: 2px;
   right: 2px;
-  min-height: 34px;
+  min-height: 30px;
   border-radius: 999px;
-  background: linear-gradient(180deg, var(--accent), var(--accent-2));
-  box-shadow: 0 0 14px rgba(57, 217, 138, 0.58);
+  background: rgba(57, 217, 138, 0.9);
+  box-shadow: 0 0 4px rgba(57, 217, 138, 0.4);
   cursor: grab;
 }
 
@@ -1430,12 +1453,12 @@ textarea {
 }
 
 .log-scrollbar.disabled {
-  opacity: 0.35;
+  opacity: 0.2;
   cursor: default;
 }
 
 .workspace.log-ai-focus .virtual-scroll {
-  border-right: 1px solid rgba(57, 217, 138, 0.18);
+  border-right: 0;
 }
 
 .virtual-scroll::-webkit-scrollbar,
@@ -1512,10 +1535,15 @@ textarea {
 }
 
 .log-row {
-  height: var(--row);
-  align-items: center;
+  min-height: var(--row);
+  align-items: stretch;
   border-bottom: 1px solid rgba(130, 191, 162, 0.08);
   cursor: default;
+}
+
+.log-row > div {
+  display: flex;
+  align-items: center;
 }
 
 .log-row:hover {
@@ -1529,11 +1557,6 @@ textarea {
 
 .log-row.ai-hit {
   background-image: linear-gradient(90deg, rgba(0, 184, 169, 0.32), transparent 34%);
-}
-
-.log-row.bookmarked .mark-cell {
-  color: var(--warn);
-  font-weight: 800;
 }
 
 .level-Fatal {
@@ -1566,6 +1589,19 @@ textarea {
   border-radius: 3px;
 }
 
+.payload-cell {
+  display: block !important;
+  align-self: stretch;
+  padding-top: 7px !important;
+  padding-bottom: 7px !important;
+  line-height: 1.35;
+  white-space: pre-wrap !important;
+  overflow: visible !important;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  text-overflow: clip !important;
+}
+
 .workspace.log-ai-focus .payload-cell {
   cursor: text;
 }
@@ -1574,8 +1610,8 @@ textarea {
   position: relative;
   z-index: 12;
   min-height: var(--row);
-  max-height: 180px;
-  overflow: auto;
+  max-height: none;
+  overflow: visible;
   white-space: pre-wrap;
   text-overflow: clip;
   border: 1px solid rgba(57, 217, 138, 0.38);
@@ -1714,7 +1750,7 @@ textarea {
   }
 
   .log-grid {
-    grid-template-columns: var(--log-grid-columns, 42px 58px 96px 70px minmax(240px, 1fr) 48px);
+    grid-template-columns: var(--log-grid-columns, 58px 96px 70px minmax(0, 1fr));
   }
 
   .ai-chat-input-row {

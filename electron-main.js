@@ -229,6 +229,23 @@ ipcMain.handle('app:read-readme', async () => {
   };
 });
 
+ipcMain.handle('app:read-user-guide', async () => {
+  const candidates = [
+    'USER_GUIDE_EN.md',
+    'USER_GUIDE.md',
+    'UserGuide.md'
+  ].map((fileName) => path.join(APP_ROOT, fileName));
+  const guidePath = candidates.find((candidate) => fs.existsSync(candidate));
+  if (!guidePath) {
+    return { ok: false, error: 'USER_GUIDE_EN.md was not found in the project folder.' };
+  }
+  return {
+    ok: true,
+    fileName: path.basename(guidePath),
+    content: fs.readFileSync(guidePath, 'utf8')
+  };
+});
+
 ipcMain.handle('clipboard:write', async (_event, text) => {
   clipboard.writeText(String(text || ''));
   return { ok: true };

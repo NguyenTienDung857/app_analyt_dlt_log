@@ -38,7 +38,7 @@
       <aside class="left-rail panel">
         <section>
           <div class="section-title">Message Detail</div>
-          <div id="detail-empty" class="empty-state">Select a row to inspect file, timestamp, counter, and payload.</div>
+          <div id="detail-empty" class="empty-state">Select a row to inspect file, timestamp, and payload.</div>
           <div id="detail-panel" class="detail-panel hidden"></div>
         </section>
 
@@ -142,22 +142,21 @@
             </div>
             <div class="log-header log-grid">
               <div>#</div>
-            <div><label class="time-toggle"><input id="show-full-time" type="checkbox"> Time</label></div>
-            <div>Delta</div>
-            <div>Payload</div>
-            <div>Len</div>
-          </div>
-          <div class="log-body">
-            <div id="virtual-scroll" class="virtual-scroll">
-              <div id="virtual-spacer"></div>
-              <div id="rows-layer" class="rows-layer"></div>
+              <div><label class="time-toggle"><input id="show-full-time" type="checkbox"> Time</label></div>
+              <div>Delta</div>
+              <div>Payload</div>
             </div>
-            <div id="log-scrollbar" class="log-scrollbar" title="Drag to scroll log">
-              <div id="log-scrollbar-thumb" class="log-scrollbar-thumb"></div>
+            <div class="log-body">
+              <div id="virtual-scroll" class="virtual-scroll">
+                <div id="virtual-spacer"></div>
+                <div id="rows-layer" class="rows-layer"></div>
+              </div>
+              <div id="log-scrollbar" class="log-scrollbar" title="Drag to scroll log">
+                <div id="log-scrollbar-thumb" class="log-scrollbar-thumb"></div>
+              </div>
+              <canvas id="minimap" class="minimap" width="18"></canvas>
             </div>
-            <canvas id="minimap" class="minimap" width="18"></canvas>
           </div>
-        </div>
       </section>
 
       <aside class="right-rail panel">

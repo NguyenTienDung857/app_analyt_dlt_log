@@ -1,19 +1,15 @@
-# NEXUS DLT AI Workbench
+# BLTN-Analysis Log (DLT + AI Diagnostics)
 
-Ứng dụng desktop đọc log `.dlt`, `.log`, `.bin`, `.txt` của Built-in Cam ECU, ưu tiên workflow AI-first để tìm lỗi, phân tích nguyên nhân gốc và đối chiếu tài liệu ECU local.
+Ứng dụng desktop (Electron) để xem log DLT-style của Built-in Cam ECU và hỗ trợ phân tích lỗi bằng AI theo workflow timeline-first.
 
-Tài liệu ECU mặc định hiện dùng: `system_space.txt`.
+Mục tiêu thiết kế:
+- Scan log nhanh trên timeline + log table gọn nhẹ.
+- Dùng AI để phân tích có trọng tâm (dòng đang chọn, khoảng thời gian, hoặc view đang filter), kèm tài liệu ECU local (RAG).
 
-## 1. Chạy ứng dụng
-
-```powershell
-cd D:\app\DltViewerSDK\dlt-web-viewer
-npm.cmd start
-```
-
-Nếu chạy trên máy mới chưa có dependency:
+## Chạy ứng dụng
 
 ```powershell
+cd D:\project\app_analyt_dlt_log
 npm.cmd install
 npm.cmd start
 ```
@@ -25,298 +21,102 @@ npm.cmd run check
 npm.cmd run syntax
 ```
 
-## 2. Tài liệu ECU / RAG
+## Mở log
 
-Khi khởi động, app tự index tài liệu ECU theo thứ tự ưu tiên:
+- Bấm `Open DLT` hoặc kéo-thả file vào màn hình đầu.
+- Hỗ trợ mở nhiều file cùng lúc; parse chạy trong worker để UI không bị đơ.
 
-1. `system_space.txt`
-2. `system_space.docx`
-3. `system_space`
-4. `01_System_Spec_BLTN_CAM_v2_2(20250602).docx` nếu tồn tại
+Input dự kiến hỗ trợ: `.dlt`, `.log`, `.bin`.
 
-Nút `Add ECU Docs` cho phép nạp thêm:
+## Log viewer
 
-- `.txt`
-- `.md`
-- `.log`
-- `.xml`
-- `.arxml`
-- `.fibex`
-- `.docx`
+### Bảng log
 
-Khi AI phân tích hoặc chat, app tự tìm các đoạn tài liệu ECU liên quan bằng RAG và gửi kèm vào prompt.
+Bảng log sử dụng virtual scrolling để xử lý file lớn.
 
-## 3. Mở log
+Cột hiện tại:
+- `#`: thứ tự message
+- `Time`: mặc định hiện `HH:mm:ss` (tick checkbox bên cạnh `Time` để hiện full timestamp)
+- `Delta`: độ trễ so với message trước
+- `Payload`: nội dung payload (wrap dòng, row cao theo nội dung)
 
-Có 2 cách:
+Có thể kéo vạch chia trên header để resize cột.
 
-1. Bấm `Open DLT`.
-2. Kéo thả file vào màn hình mở file.
+### Timeline / Minimap / Scroll
 
-Hỗ trợ mở nhiều file cùng lúc. Khi parse, app hiển thị tiến trình, tên file, dung lượng, số message đã load và thời gian parse.
+- `Minute Timeline` (phía trên): click để nhảy nhanh đến vùng thời gian tương ứng.
+- `Minimap` (bên phải log list): click để nhảy nhanh đến vùng có cảnh báo/lỗi/AI highlight.
+- Thanh cuộn dọc riêng (bên cạnh log list): rail nhỏ, kéo để di chuyển nhanh trong danh sách.
 
-## 4. AI Workbench
+## Message Detail
 
-Đây là vùng chính của app.
-
-Chức năng:
-
-- Chat trực tiếp với AI bằng ô nhập lớn.
-- `Ctrl + Enter`: gửi chat.
-- `Chat với dòng chọn`: gửi message đang chọn và context trước/sau.
-- `Chat với filter hiện tại`: gửi các dòng đang được filter.
-- `Chat với lỗi nghi ngờ`: gửi cụm Error/Fatal/Warn/keyword nghi ngờ.
-
-Khi chat, app gửi kèm:
-
-- Câu hỏi của bạn.
-- Context log đang chọn/lọc/nghi ngờ.
-- Thống kê session log.
-- Tài liệu ECU liên quan từ `system_space.txt`.
-
-AI được yêu cầu trả lời bằng tiếng Việt, nêu bằng chứng message id, giả thuyết nguyên nhân và bước kiểm tra tiếp theo.
-
-## 5. Các nút ẩn/hiện giao diện
-
-- `Session`: ẩn/hiện cột file, thống kê, cấu hình AI/RAG.
-- `Filter`: ẩn/hiện vùng search/filter.
-- `Detail`: ẩn/hiện cột detail bên phải.
-- `AI Focus`: chuyển giao diện sang chế độ ưu tiên AI, ẩn vùng phụ.
-
-## 6. Dashboard
-
-Cột bên trái hiển thị:
-
-- `Total`: tổng message.
-- `Filtered`: số message sau filter.
-- `Error/Fatal`: tổng lỗi nghiêm trọng.
-- `Warning`: tổng cảnh báo.
-- `ECU`: số ECU khác nhau.
-- `Span`: khoảng thời gian log.
-- `Level Distribution`: phân bố level.
-
-## 7. Timeline và Minimap
-
-Timeline dùng màu:
-
-- Xanh dương: normal/info.
-- Vàng: warning.
-- Đỏ: error/fatal.
-- Xanh cyan: message AI đánh dấu nghi ngờ.
-
-Click timeline hoặc minimap để nhảy nhanh đến vùng log tương ứng.
-
-## 8. Bảng log
-
-Bảng log dùng virtual scrolling, phù hợp file lớn.
-
-Cột chính:
-
-- `Mark`
-- `#`
-- `Time`
-- `Delta`
-- `Level`
-- `Type`
-- `ECU`
-- `APID`
-- `CTID`
-- `Payload`
-- `Len`
-
-Click một dòng để xem detail. Click `Mark` để bookmark.
-
-## 9. Search và Filter
-
-Search thường hỗ trợ:
-
-- Payload
-- ECU/APID/CTID
-- Level
-- Type
+Click vào 1 dòng log để xem:
 - File
-- Case-sensitive
-- Regex
+- Timestamp
+- Payload đầy đủ
 
-Filter thời gian:
+Lưu ý: dòng `Counter` đã được bỏ khỏi Message Detail (UI gọn hơn).
 
-- `From`
-- `To`
-- `Marked`
+## Search / Filter
 
-Export:
+Panel bên trái:
 
-- `Export CSV`
-- `Export JSON`
+- Ô search `Search payload or time... (F)` để tìm nhanh.
+- `AI Search`: nhập câu hỏi tự nhiên và để AI chuyển thành filter plan local.
+- `Time Range`: slider 2 đầu để giới hạn view theo khoảng thời gian.
+  - Bấm `Use ID` để đổi đơn vị từ `Time` sang `ID`.
+  - Bấm `Full Log` để reset về toàn bộ log.
+- `Export CSV`: xuất các dòng đang hiển thị (sau khi áp dụng search + range + AI Search filter).
 
-## 10. Natural Language Search
+Trong `Log AI Focus`, có thêm nút `Search` nhỏ ngay trên bảng log để quick search.
 
-Ô `Natural language search` dùng để hỏi kiểu tự nhiên.
+## AI Diagnostic Report
 
-Ví dụ:
+Dùng `Log AI Focus` để mở panel AI bên phải.
 
-```text
-Tìm những lúc camera bị rớt frame sau khi nhiệt độ vượt quá 80 độ
-```
+1. Nhập câu hỏi vào ô chat.
+2. Chọn mode:
+   - `Current line`: phân tích dòng đang chọn + context gần đó
+   - `Range`: phân tích chỉ khoảng A-B của slider AI (Time/ID)
+   - `Filtered`: phân tích view đang filter (context được rút gọn)
+   - `Bug`: prompt kiểu whole-log để tìm vấn đề quan trọng nhất
+3. Bấm `Send` (hoặc `Ctrl + Enter`).
 
-App sẽ:
+Tính năng liên quan:
+- Có thể chọn model theo từng lần `Send` bằng dropdown (nếu để `Config Default` thì dùng model trong AI config).
+- Nút `Prompt` mở panel guidance để thêm yêu cầu trả lời (được lưu local).
+- App gửi context rút gọn (chủ yếu time + payload) và kèm snippet tài liệu ECU (RAG) để kiểm soát token.
 
-- Gọi AI để chuyển câu hỏi thành filter.
-- Nếu AI trả filter rỗng, app tự fallback bằng bộ phân tích local.
-- Tự nhận diện các concept như camera/frame/FPS, nhiệt độ, voltage, timeout, DTC/UDS, SD/storage, PMD, reset, CAN/Ethernet/SOMEIP.
-- Hiển thị số dòng match trong `AI Diagnostic Report`.
+## Add ECU Docs / RAG
 
-## 11. AI Analyze Row
+- Bấm `Add ECU Docs` để nạp tài liệu ECU local cho RAG.
+- Hỗ trợ: `.txt`, `.log`, `.md`, `.xml`, `.arxml`, `.fibex`, `.docx`.
+- `Docs: <chunks> chunks, <terms> terms` hiện trạng thái index.
 
-Dùng khi thấy một dòng nghi ngờ.
+## AI / RAG Config (locked)
 
-Quy trình:
+Panel `AI / RAG Config` bị khóa mặc định và gồm:
+- Base URL
+- Model
+- API key
+- Extra headers JSON
+- `Suggest context after opening logs`
+- Context window (ms)
 
-1. Click dòng cần phân tích.
-2. Bấm `Analyze Row`.
-3. App lấy context quanh dòng đó.
-4. App gửi log context + RAG tài liệu ECU cho AI.
-5. AI trả report tiếng Việt.
-6. `suspicious_message_ids` được highlight và bookmark.
+## Download Guide
 
-## 12. AI Analyze Range A-B
+Nút `Download Guide` sẽ tải file hướng dẫn sử dụng (English) `USER_GUIDE_EN.md`.
 
-Dùng khi lỗi kéo dài trong một khoảng thời gian.
+## File quan trọng
 
-Quy trình:
-
-1. Nhập `Range A`.
-2. Nhập `Range B`.
-3. Bấm `AI A-B`.
-
-App gửi các message trong khoảng A-B và context trước/sau cho AI.
-
-## 13. AI Auto Scan
-
-Nút `Run AI Auto Scan` dùng để quét nhanh log.
-
-App sẽ:
-
-- Tìm cụm `Error/Fatal`.
-- Nếu không có, tìm `Warn` và keyword nghi ngờ như `timeout`, `fail`, `dtc`, `reset`, `fps`, `voltage`, `temperature`, `camera`, `sd`, `pmd`.
-- Gửi context cho AI để tạo báo cáo tổng thể.
-- Highlight/bookmark message nghi ngờ.
-
-## 14. Sequence Diagram
-
-Nút `Sequence` gửi range A-B cho AI để sinh Mermaid sequence diagram.
-
-Kết quả hiển thị trong report dạng JSON có:
-
-- `summary`
-- `mermaid`
-- `participants`
-- `suspicious_message_ids`
-
-Hiện app hiển thị Mermaid code, chưa render trực tiếp thành hình.
-
-## 15. Test Script
-
-Nút `Test Script` yêu cầu AI tạo script tái hiện lỗi trên bàn test.
-
-Nếu thiếu thông tin CAPL, AI ưu tiên Python pseudo-code an toàn.
-
-## 16. Signal Plot
-
-Nút `Plot First Numeric Signal`:
-
-1. Chọn message có payload chứa số.
-2. App tìm các message cùng ECU/APID/CTID.
-3. Lấy số đầu tiên trong payload.
-4. Vẽ line chart theo thời gian.
-
-Phù hợp với temperature, voltage, FPS, counter, state numeric.
-
-## 17. Diff 2 file log
-
-Khi mở từ 2 file trở lên, app tính diff signature cơ bản giữa 2 file đầu tiên.
-
-Signature gồm:
-
-- Level
-- ECU
-- APID
-- CTID
-- Payload đã normalize số thành `#`
-
-## 18. DLT Non-Verbose và FIBEX/ARXML
-
-Với DLT verbose, app decode cơ bản string/raw/bool/uint/sint/float.
-
-Với DLT non-verbose:
-
-- App hiển thị message id và payload non-verbose.
-- App không ép AI đọc raw hex như text.
-- Muốn decode đúng cần nạp FIBEX/ARXML.
-
-## 19. Cấu hình AI
-
-Mặc định:
-
-- Base URL: `https://rsqd56n.9router.com/v1`
-- Model: `cx/gpt-5.5`
-- API key test đã được cấu hình sẵn trong app.
-
-Nếu nhập key khác trong UI và bấm `Save AI Config`, key đó sẽ override key mặc định.
-
-## 20. Workflow khuyến nghị
-
-1. Mở file `.dlt`.
-2. Bấm `AI Focus`.
-3. Bấm `Run AI Auto Scan`.
-4. Nếu muốn hỏi sâu, dùng ô chat trong `AI Workbench`.
-5. Khi thấy dòng nghi ngờ, click dòng đó rồi bấm `Chat với dòng chọn` hoặc `Analyze Row`.
-6. Nếu lỗi kéo dài, nhập A-B rồi dùng `AI A-B`.
-7. Dùng bookmark/highlight để lưu evidence.
-8. Export JSON/CSV nếu cần chia sẻ.
-
-## 21. Troubleshooting
-
-Nếu app không chạy:
-
-```powershell
-npm.cmd install
-npm.cmd start
-```
-
-Nếu RAG không có docs:
-
-- Kiểm tra `system_space.txt` nằm cùng thư mục app.
-- Bấm `Add ECU Docs`.
-- Xem dòng `Docs: ... chunks`.
-
-Nếu AI không trả đúng:
-
-- Kiểm tra model là `cx/gpt-5.5`.
-- Kiểm tra base URL là `https://rsqd56n.9router.com/v1`.
-- Thử chạy:
-
-```powershell
-node scripts\test-ai.js --diagnose
-```
-
-Nếu DLT parse ít message:
-
-- Kiểm tra file có storage header DLT không.
-- Nếu là text log, mở `.log` hoặc `.txt`.
-- Nếu là non-verbose DLT, cần FIBEX/ARXML để decode đầy đủ.
-
-## 22. File quan trọng
-
-- `electron-main.js`: Electron main process, IPC, AI config, RAG bootstrap.
-- `preload.js`: API an toàn cho renderer.
-- `renderer.js`: UI, virtual scroll, filter, AI Workbench, chat.
-- `style.css`: giao diện.
-- `src/parser/dltParser.js`: parser DLT/text.
-- `src/workers/parseWorker.js`: worker parse file lớn.
-- `src/services/aiClient.js`: client gọi 9router/OpenAI-compatible API.
-- `src/services/contextBuilder.js`: gom context log và tạo prompt.
-- `src/services/ragStore.js`: RAG local.
-- `src/services/docReader.js`: đọc text/XML/DOCX.
-- `system_space.txt`: tài liệu ECU mặc định.
-
+- `electron-main.js`: main process, IPC, file dialog, export, ingest docs.
+- `preload.js`: API bridge cho renderer.
+- `index.html`: UI layout.
+- `renderer.js`: UI logic (virtual scroll, timeline/minimap, filter, AI chat/report).
+- `style.css`: theme va UI style.
+- `src/parser/dltParser.js`: parse DLT/text.
+- `src/workers/parseWorker.js`: worker parse.
+- `src/services/aiClient.js`: client goi OpenAI-compatible API (proxy friendly).
+- `src/services/contextBuilder.js`: build prompt + context + doc snippets.
+- `src/services/ragStore.js`: RAG local store.
+- `src/services/docReader.js`: doc reader (TXT/XML/DOCX).

@@ -30,7 +30,8 @@ function buildNaturalSearchPayload(request, ragDocs) {
   return {
     systemPrompt: [
       'Convert a natural-language ECU log search request into a deterministic local filter.',
-      'Always return valid JSON. Explanation strings should use the same language as the user query.',
+      'Translate any non-English user intent into English technical log keywords before building the filter.',
+      'Always return valid JSON. All search_text and keywords must be English because the log payloads are English.',
       'Available DLT fields: payload, level, type, ecu, apid, ctid, fileName, time, timeMs, messageId.',
       'Do not return an empty filter. If uncertain, create broad keywords from the question and technical synonyms.',
       'Example: "dropped frame" -> keywords include frame, fps, drop, dropped, lost, camera. "temperature > 80" -> temperature, temp, thermal, overheat, 80.',

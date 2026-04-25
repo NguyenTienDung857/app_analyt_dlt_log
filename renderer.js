@@ -5,8 +5,8 @@ const MIN_ROW_HEIGHT = 34;
 const ROW_LINE_HEIGHT = 17;
 const ROW_VERTICAL_PADDING = 10;
 const MAX_RENDER_ROWS = 120;
-const DEFAULT_LOG_COLUMNS = [66, 108, 76, 640, 58];
-const MIN_LOG_COLUMNS = [42, 72, 52, 180, 44];
+const DEFAULT_LOG_COLUMNS = [66, 108, 76, 640];
+const MIN_LOG_COLUMNS = [42, 72, 52, 180];
 const DEFAULT_RUNTIME_MODEL = 'gpt-5.2';
 
 const state = {
@@ -649,23 +649,96 @@ function renderVirtualRows() {
   const count = pageIndices.length;
   const viewportHeight = el.virtualScroll.clientHeight || 1;
   const scrollTop = el.virtualScroll.scrollTop;
-  const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - 12);
-  const visibleCount = Math.min(MAX_RENDER_ROWS, Math.ceil(viewportHeight / ROW_HEIGHT) + 24);
-  const end = Math.min(count, start + visibleCount);
+  const metrics = buildVirtualMetrics(pageIndices);
+  const start = Math.max(0, findRowByOffset(metrics.offsets, scrollTop) - 8);
+  const visibleBottom = scrollTop + viewportHeight + 420;
+  let end = start;
+  while (end < count && metrics.offsets[end] < visibleBottom && end - start < MAX_RENDER_ROWS) {
+    end += 1;
+  }
+  end = Math.min(count, Math.max(end, start + 1));
 
-  el.virtualSpacer.style.height = `${count * ROW_HEIGHT}px`;
-  el.rowsLayer.style.transform = `translateY(${start * ROW_HEIGHT}px)`;
+  el.virtualSpacer.style.height = `${metrics.totalHeight}px`;
+  el.rowsLayer.style.transform = `translateY(${metrics.offsets[start] || 0}px)`;
 
   const rows = [];
   for (let localIndex = start; localIndex < end; localIndex += 1) {
     const message = state.messages[pageIndices[localIndex]];
-    rows.push(renderRow(message, localIndex));
+    rows.push(renderRow(message, localIndex, metrics.heights[localIndex]));
   }
   el.rowsLayer.innerHTML = rows.join('');
   state.lastVirtualStart = start;
   state.lastVirtualEnd = end;
   state.lastVirtualCount = count;
   updateLogScrollbar();
+}
+
+function buildVirtualMetrics(pageIndices) {
+  const payloadWidth = getPayloadColumnWidth();
+  const cache = state.virtualMetrics;
+  if (
+    cache &&
+    cache.indices === pageIndices &&
+    cache.payloadWidth === payloadWidth &&
+    cache.count === pageIndices.length
+  ) {
+    return cache;
+  }
+
+  const heights = new Array(pageIndices.length);
+  const offsets = new Array(pageIndices.length + 1);
+  offsets[0] = 0;
+  for (let index = 0; index < pageIndices.length; index += 1) {
+    const message = state.messages[pageIndices[index]];
+    const height = estimateRowHeight(message, payloadWidth);
+    heights[index] = height;
+    offsets[index + 1] = offsets[index] + height;
+  }
+
+  state.virtualMetrics = {
+    indices: pageIndices,
+    payloadWidth,
+    count: pageIndices.length,
+    heights,
+    offsets,
+    totalHeight: offsets[pageIndices.length] || 0
+  };
+  return state.virtualMetrics;
+}
+
+function estimateRowHeight(message, payloadWidth) {
+  const payload = String(message?.payload || '');
+  if (!payload) return MIN_ROW_HEIGHT;
+  const charsPerLine = Math.max(24, Math.floor((payloadWidth - 18) / 7.2));
+  const lines = payload.split(/\r?\n/).reduce((total, line) => {
+    return total + Math.max(1, Math.ceil(line.length / charsPerLine));
+  }, 0);
+  return Math.max(MIN_ROW_HEIGHT, Math.ceil(lines * ROW_LINE_HEIGHT + ROW_VERTICAL_PADDING));
+}
+
+function getPayloadColumnWidth() {
+  if (el.virtualScroll && el.virtualScroll.clientWidth > 0) {
+    const widths = state.logColumnWidths.map((w, i) => Math.max(MIN_LOG_COLUMNS[i], Number(w) || DEFAULT_LOG_COLUMNS[i]));
+    const fixed = widths[0] + widths[1] + widths[2];
+    return Math.max(MIN_LOG_COLUMNS[3], el.virtualScroll.clientWidth - fixed);
+  }
+  return Math.max(MIN_LOG_COLUMNS[3], Number(state.logColumnWidths[3]) || DEFAULT_LOG_COLUMNS[3]);
+}
+
+function findRowByOffset(offsets, value) {
+  let low = 0;
+  let high = Math.max(0, offsets.length - 2);
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    if (offsets[mid + 1] <= value) {
+      low = mid + 1;
+    } else if (offsets[mid] > value) {
+      high = mid - 1;
+    } else {
+      return mid;
+    }
+  }
+  return Math.max(0, Math.min(offsets.length - 2, low));
 }
 
 function scheduleVirtualRows() {
@@ -677,18 +750,15 @@ function scheduleVirtualRows() {
   });
 }
 
-function renderRow(message, localIndex) {
-  const bookmarked = state.bookmarks.has(message.id);
+function renderRow(message, localIndex, rowHeight) {
   const selected = state.selectedId === message.id;
   const aiHit = state.aiHighlights.has(message.id);
   return `
-    <div class="log-row log-grid ${selected ? 'selected' : ''} ${bookmarked ? 'bookmarked' : ''} ${aiHit ? 'ai-hit' : ''}" data-id="${message.id}" data-local-index="${localIndex}">
-      <div class="mark-cell" data-action="mark">${bookmarked ? 'B' : '-'}</div>
-      <div>${message.id}</div>
-      <div title="${escapeHtml(message.time)}">${escapeHtml(formatLogTime(message))}</div>
-      <div>${formatDelta(message.deltaMs)}</div>
+    <div class="log-row log-grid ${selected ? 'selected' : ''} ${aiHit ? 'ai-hit' : ''}" data-id="${message.id}" data-local-index="${localIndex}" style="height:${rowHeight}px">
+      <div>${highlightSearch(message.id)}</div>
+      <div title="${escapeHtml(message.time)}">${highlightSearch(formatLogTime(message))}</div>
+      <div>${highlightSearch(formatDelta(message.deltaMs))}</div>
       <div class="payload-cell" title="${escapeHtml(message.payload || '')}">${highlightSearch(message.payload || '')}</div>
-      <div>${message.length || message.payloadLength || 0}</div>
     </div>
   `;
 }
@@ -702,13 +772,13 @@ function updateLogScrollbar() {
 
   if (!scrollable || !state.filtered.length) {
     el.logScrollbar.classList.add('disabled');
-    el.logScrollbarThumb.style.height = `${Math.max(34, railHeight)}px`;
+    el.logScrollbarThumb.style.height = `${Math.max(30, railHeight)}px`;
     el.logScrollbarThumb.style.transform = 'translateY(0)';
     return;
   }
 
   el.logScrollbar.classList.remove('disabled');
-  const thumbHeight = clampNumber((clientHeight / scrollHeight) * railHeight, 34, railHeight);
+  const thumbHeight = clampNumber((clientHeight / scrollHeight) * railHeight, 30, railHeight);
   const top = (el.virtualScroll.scrollTop / scrollable) * Math.max(0, railHeight - thumbHeight);
   el.logScrollbarThumb.style.height = `${thumbHeight}px`;
   el.logScrollbarThumb.style.transform = `translateY(${top}px)`;
@@ -749,6 +819,7 @@ function startLogColumnResize(event, columnIndex) {
     state.logColumnWidths[columnIndex] = clampNumber(startWidth + delta, MIN_LOG_COLUMNS[columnIndex], 1200);
     saveLogColumnWidths();
     applyLogColumnTemplate();
+    state.virtualMetrics = null;
     scheduleVirtualRows();
   };
   const handleUp = () => {
@@ -763,15 +834,20 @@ function startLogColumnResize(event, columnIndex) {
 
 function applyLogColumnTemplate() {
   const widths = state.logColumnWidths.map((width, index) => Math.max(MIN_LOG_COLUMNS[index], Number(width) || DEFAULT_LOG_COLUMNS[index]));
-  const template = `${widths[0]}px ${widths[1]}px ${widths[2]}px ${widths[3]}px minmax(${widths[4]}px, 1fr) ${widths[5]}px`;
+  const template = `${widths[0]}px ${widths[1]}px ${widths[2]}px minmax(0, 1fr)`;
   document.documentElement.style.setProperty('--log-grid-columns', template);
 }
 
 function loadLogColumnWidths() {
   try {
     const parsed = JSON.parse(localStorage.getItem('bltn-log-column-widths') || '[]');
-    if (Array.isArray(parsed) && parsed.length === DEFAULT_LOG_COLUMNS.length) {
-      return parsed.map((value, index) => clampNumber(value, MIN_LOG_COLUMNS[index], 1200));
+    if (Array.isArray(parsed)) {
+      const migrated = parsed.length >= 6
+        ? [parsed[1], parsed[2], parsed[3], parsed[4]]
+        : parsed.slice(0, DEFAULT_LOG_COLUMNS.length);
+      if (migrated.length === DEFAULT_LOG_COLUMNS.length) {
+        return migrated.map((value, index) => clampNumber(value, MIN_LOG_COLUMNS[index], 1200));
+      }
     }
   } catch (_error) {
     // Ignore invalid saved UI state.
@@ -791,10 +867,6 @@ function handleRowClick(event) {
   const row = event.target.closest('.log-row');
   if (!row) return;
   const id = Number(row.dataset.id);
-  if (event.target.dataset.action === 'mark') {
-    toggleBookmark(id);
-    return;
-  }
   selectMessage(id, true);
 }
 
@@ -812,12 +884,13 @@ function scrollToMessage(id) {
   const messageIndex = state.messages.findIndex((message) => message.id === id);
   const localIndex = pageIndices.indexOf(messageIndex);
   if (localIndex >= 0) {
+    const metrics = buildVirtualMetrics(pageIndices);
     const viewportHeight = el.virtualScroll.clientHeight || 0;
     const currentScroll = el.virtualScroll.scrollTop;
-    const rowTop = localIndex * ROW_HEIGHT;
-    const rowBottom = rowTop + ROW_HEIGHT;
+    const rowTop = metrics.offsets[localIndex] || 0;
+    const rowBottom = metrics.offsets[localIndex + 1] || rowTop + MIN_ROW_HEIGHT;
     if (rowTop < currentScroll || rowBottom > currentScroll + viewportHeight) {
-      el.virtualScroll.scrollTop = Math.max(0, rowTop - ROW_HEIGHT * 4);
+      el.virtualScroll.scrollTop = Math.max(0, rowTop - MIN_ROW_HEIGHT * 4);
     }
     return;
   }
@@ -826,7 +899,8 @@ function scrollToMessage(id) {
   if (filteredPosition >= 0 && state.pageSize !== 'all') {
     state.currentPage = Math.floor(filteredPosition / Number(state.pageSize)) + 1;
     renderPagination();
-    el.virtualScroll.scrollTop = (filteredPosition % Number(state.pageSize)) * ROW_HEIGHT;
+    const metrics = buildVirtualMetrics(getCurrentPageIndices());
+    el.virtualScroll.scrollTop = metrics.offsets[filteredPosition % Number(state.pageSize)] || 0;
   }
 }
 
@@ -953,7 +1027,6 @@ function renderDetail(message) {
   el.detailPanel.innerHTML = `
     ${kv('File', message.fileName)}
     ${kv('Timestamp', message.time)}
-    ${kv('Counter', message.counter ?? '-')}
     <div class="raw-box">Payload\n${escapeHtml(message.payload || '')}</div>
   `;
 }
@@ -1029,19 +1102,19 @@ async function addDocs() {
 }
 
 async function downloadUserGuide() {
-  const readme = await api.getReadme();
-  if (!readme.ok) {
-    el.parseStatus.textContent = readme.error || 'README.md was not found.';
+  const guide = await api.getUserGuide();
+  if (!guide.ok) {
+    el.parseStatus.textContent = guide.error || 'USER_GUIDE_EN.md was not found.';
     return;
   }
   const result = await api.saveExport({
-    title: 'Download README',
-    defaultPath: readme.fileName || 'README.md',
+    title: 'Download User Guide',
+    defaultPath: guide.fileName || 'USER_GUIDE_EN.md',
     filters: [{ name: 'Markdown', extensions: ['md'] }],
-    content: readme.content || ''
+    content: guide.content || ''
   });
   if (result.ok) {
-    el.parseStatus.textContent = `Saved README: ${result.filePath}`;
+    el.parseStatus.textContent = `Saved guide: ${result.filePath}`;
   }
 }
 
@@ -1055,7 +1128,6 @@ function buildUserGuideContent() {
     '- Use `Log AI Focus` to split the screen: logs on the left, AI Diagnostic Report on the right.',
     '',
     '## 2. Log table',
-    '- `Mark`: bookmark an important row.',
     '- `#`: message order.',
     '- `Time`: shows `HH:mm:ss` by default; tick the checkbox beside `Time` to show the full date-time.',
     '- `Delta`: time gap from the previous message.',
@@ -1326,7 +1398,6 @@ function buildFilteredContextMessages(limit) {
     message.level === 'Fatal' ||
     message.level === 'Error' ||
     message.level === 'Warn' ||
-    state.bookmarks.has(message.id) ||
     state.aiHighlights.has(message.id)
   ));
   const selected = new Map(important.map((message) => [message.id, message]));
@@ -1938,7 +2009,7 @@ function enrichAiResult(result, requestPayload) {
   if (!Array.isArray(next.next_steps) || !next.next_steps.length) {
     next.next_steps = [
       'Expand context around the issue and rerun AI range analysis.',
-      'Inspect bookmarked/highlighted messages on the timeline.',
+      'Inspect highlighted messages on the timeline.',
       'Load FIBEX/ARXML if non-verbose payloads are not decoded.'
     ];
   }
@@ -1958,9 +2029,15 @@ function isSparseFallbackField(value, kind) {
 }
 
 async function runNaturalSearch() {
-  const query = el.naturalQuery.value.trim();
-  if (!query) return;
-  setAiStatus('AI is converting the natural-language query into a filter...', false);
+  if (state.naturalSearching) return;
+  const rawQuery = el.naturalQuery.value.trim();
+  if (!rawQuery) return;
+  const query = translateSearchQueryToEnglish(rawQuery);
+  if (query && query !== rawQuery) {
+    el.naturalQuery.value = query;
+  }
+  setNaturalSearchBusy(true);
+  setAiStatus('AI is converting the English search query into a filter...', false);
   const localPlan = buildNaturalSearchPlan(query);
   try {
     const response = await api.naturalSearch({ query });
@@ -1973,7 +2050,15 @@ async function runNaturalSearch() {
     applyNaturalSearchPlan(mergedPlan, isEmptyNaturalPlan(aiPlan) ? 'local-empty-ai' : 'ai');
   } catch (error) {
     applyNaturalSearchPlan(localPlan, 'local', error.message);
+  } finally {
+    setNaturalSearchBusy(false);
   }
+}
+
+function setNaturalSearchBusy(isBusy) {
+  state.naturalSearching = Boolean(isBusy);
+  el.btnNatural.disabled = state.naturalSearching;
+  el.btnNatural.textContent = state.naturalSearching ? 'Searching...' : 'AI Search';
 }
 
 function localNaturalFallback(query) {
@@ -2270,10 +2355,76 @@ function normalizeSearchText(value) {
     .trim();
 }
 
+function translateSearchQueryToEnglish(value) {
+  let text = normalizeSearchText(value);
+  if (!text) return '';
+
+  const phraseMap = [
+    ['rot frame', 'dropped frame'],
+    ['drop frame', 'dropped frame'],
+    ['mat frame', 'lost frame'],
+    ['roi frame', 'dropped frame'],
+    ['nhiet do', 'temperature'],
+    ['qua nhiet', 'overheat'],
+    ['dien ap', 'voltage'],
+    ['nguon', 'power'],
+    ['khong phan hoi', 'no response'],
+    ['khong tra loi', 'no response'],
+    ['ma loi', 'dtc'],
+    ['chan doan', 'diagnostic'],
+    ['khoi dong lai', 'reboot'],
+    ['khoi dong', 'startup'],
+    ['tat may', 'shutdown'],
+    ['the nho', 'storage card'],
+    ['bo nho', 'memory'],
+    ['tim cho toi', 'search'],
+    ['tim kiem', 'search']
+  ];
+  for (const [source, target] of phraseMap) {
+    text = text.replace(new RegExp(`\\b${escapeRegExp(source)}\\b`, 'g'), target);
+  }
+
+  const wordMap = {
+    loi: 'error',
+    hong: 'fail',
+    fail: 'fail',
+    failed: 'failed',
+    treo: 'hang',
+    cham: 'slow',
+    tre: 'delay',
+    nong: 'hot',
+    mat: 'lost',
+    roi: 'drop',
+    reset: 'reset',
+    reboot: 'reboot',
+    camera: 'camera',
+    cam: 'camera',
+    file: 'file',
+    sd: 'sd',
+    canh: 'warning',
+    bao: 'warning',
+    timeout: 'timeout',
+    dtc: 'dtc',
+    uds: 'uds'
+  };
+
+  const translated = text
+    .split(/[^a-z0-9_.-]+/g)
+    .map((term) => wordMap[term] || term)
+    .filter((term) => term && !NATURAL_TRANSLATION_STOP_WORDS.has(term));
+  return uniqueStrings(translated).join(' ') || String(value || '').trim();
+}
+
 const NATURAL_STOP_WORDS = new Set([
   'tim', 'kiem', 'cho', 'toi', 'nhung', 'luc', 'khi', 'sau', 'truoc', 'trong', 'khoang',
   'cac', 'dong', 'log', 'message', 'ban', 'tin', 'co', 'bi', 'va', 'hoac', 'neu', 'thi',
   'the', 'nao', 'hay', 'giup', 'minh', 'cua', 'ecu', 'app'
+]);
+
+const NATURAL_TRANSLATION_STOP_WORDS = new Set([
+  'search', 'tim', 'kiem', 'cho', 'toi', 'minh', 'hay', 'giup', 'cac', 'nhung',
+  'dong', 'log', 'message', 'ban', 'tin', 'co', 'bi', 'va', 'hoac', 'khi',
+  'sau', 'truoc', 'trong', 'khoang', 'cua', 'thi', 'la'
 ]);
 
 const NATURAL_CONCEPTS = [
@@ -2372,7 +2523,6 @@ function applyAiResult(result) {
 function applyAiHighlights(ids) {
   for (const id of ids.map(Number).filter(Number.isFinite)) {
     state.aiHighlights.add(id);
-    state.bookmarks.add(id);
   }
   renderAll();
 }
@@ -2529,14 +2679,6 @@ function csvCell(value) {
   return `"${text.replace(/"/g, '""')}"`;
 }
 
-function toggleBookmark(id) {
-  if (!Number.isFinite(Number(id))) return;
-  const numericId = Number(id);
-  if (state.bookmarks.has(numericId)) state.bookmarks.delete(numericId);
-  else state.bookmarks.add(numericId);
-  renderAll();
-}
-
 function handleTimelineClick(event) {
   const rect = el.timeline.getBoundingClientRect();
   const ratio = (event.clientX - rect.left) / rect.width;
@@ -2572,9 +2714,6 @@ function handleKeyboard(event) {
   } else if (event.key === 'ArrowUp') {
     event.preventDefault();
     moveSelection(-1);
-  } else if (event.key.toLowerCase() === 'b') {
-    event.preventDefault();
-    toggleBookmark(state.selectedId);
   }
 }
 
@@ -2617,8 +2756,7 @@ function collectStats() {
     files: state.files,
     levels,
     timeSpanMs: state.firstTimeMs !== null && state.lastTimeMs !== null ? state.lastTimeMs - state.firstTimeMs : 0,
-    ecuCount: new Set(state.messages.map((message) => message.ecu).filter(Boolean)).size,
-    bookmarks: Array.from(state.bookmarks)
+    ecuCount: new Set(state.messages.map((message) => message.ecu).filter(Boolean)).size
   };
 }
 
@@ -2668,7 +2806,6 @@ function clearData() {
   state.messages = [];
   state.filtered = [];
   state.files = [];
-  state.bookmarks = new Set();
   state.aiHighlights = new Set();
   state.selectedId = null;
   state.firstTimeMs = null;
@@ -2694,6 +2831,7 @@ function clearData() {
   };
   el.fileList.innerHTML = '';
   el.virtualScroll.scrollTop = 0;
+  state.virtualMetrics = null;
   renderAll();
 }
 
@@ -2720,9 +2858,19 @@ function highlightSearch(value) {
   const text = String(value || '');
   const query = el.searchInput.value.trim();
   if (!query) return escapeHtml(text);
-  const flags = 'gi';
+  const escaped = escapeHtml(text);
   const safe = escapeRegExp(query);
-  return escapeHtml(text).replace(new RegExp(safe, flags), (match) => `<mark>${match}</mark>`);
+  const exactRegex = new RegExp(safe, 'gi');
+  if (exactRegex.test(text)) {
+    exactRegex.lastIndex = 0;
+    return escaped.replace(exactRegex, (match) => `<mark>${match}</mark>`);
+  }
+
+  const compactNeedle = compactSearchText(query);
+  if (compactNeedle && compactSearchText(text).includes(compactNeedle)) {
+    return `<mark>${escaped}</mark>`;
+  }
+  return escaped;
 }
 
 function escapeHtml(value) {
@@ -2759,7 +2907,12 @@ function formatDuration(ms) {
 
 function formatDelta(ms) {
   if (!Number.isFinite(ms)) return '-';
-  return `${ms.toFixed(3)} ms`;
+  return `${formatTrimmedNumber(ms, 3)}ms`;
+}
+
+function formatTrimmedNumber(value, decimals) {
+  const fixed = Number(value).toFixed(decimals);
+  return fixed.replace(/\.?0+$/, '');
 }
 
 function formatTimeLabel(ms) {

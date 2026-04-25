@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm start *)",
+      "Bash(powershell -Command \"Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Screen]::PrimaryScreen | Select-Object Bounds, WorkingArea\")",
+      "Bash(powershell *)",
+      "Bash(Start-Process npm *)"
+    ]
+  }
+}
