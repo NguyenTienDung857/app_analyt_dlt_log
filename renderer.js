@@ -5,6 +5,7 @@ const ROW_HEIGHT = 32;
 const MAX_RENDER_ROWS = 120;
 const DEFAULT_LOG_COLUMNS = [46, 66, 108, 82, 640, 58];
 const MIN_LOG_COLUMNS = [34, 42, 72, 58, 180, 44];
+const DEFAULT_RUNTIME_MODEL = 'gpt-5.2';
 
 const state = {
   messages: [],
@@ -21,9 +22,18 @@ const state = {
   naturalFilter: null,
   parseDone: false,
   aiConfig: null,
+  aiConfigUnlocked: false,
   aiChatMode: 'selection',
   aiSending: false,
+  aiGuidance: loadTextSetting('bltn-ai-guidance'),
   aiRange: {
+    min: null,
+    max: null,
+    from: null,
+    to: null,
+    dirty: false
+  },
+  filterRange: {
     min: null,
     max: null,
     from: null,
@@ -46,6 +56,7 @@ const el = {
   btnOpen: document.getElementById('btn-open'),
   btnOpenEmpty: document.getElementById('btn-open-empty'),
   btnDocs: document.getElementById('btn-docs'),
+  btnGuide: document.getElementById('btn-guide'),
   btnAiFocus: document.getElementById('btn-ai-focus'),
   btnTheme: document.getElementById('btn-theme'),
   btnClear: document.getElementById('btn-clear'),
@@ -59,7 +70,6 @@ const el = {
   statWarns: document.getElementById('stat-warns'),
   statEcu: document.getElementById('stat-ecu'),
   statSpan: document.getElementById('stat-span'),
-  distribution: document.getElementById('distribution'),
   docsStatus: document.getElementById('docs-status'),
   searchInput: document.getElementById('search-input'),
   searchField: document.getElementById('search-field'),
@@ -73,6 +83,14 @@ const el = {
   pageInfo: document.getElementById('page-info'),
   timeFrom: document.getElementById('time-from'),
   timeTo: document.getElementById('time-to'),
+  filterRangePanel: document.getElementById('filter-time-range-panel'),
+  filterRangeStart: document.getElementById('filter-range-start'),
+  filterRangeEnd: document.getElementById('filter-range-end'),
+  filterRangeSelection: document.getElementById('filter-range-selection'),
+  filterRangeFromLabel: document.getElementById('filter-range-from-label'),
+  filterRangeToLabel: document.getElementById('filter-range-to-label'),
+  filterRangeLimits: document.getElementById('filter-range-limits'),
+  btnFilterRangeClear: document.getElementById('btn-filter-range-clear'),
   markedOnly: document.getElementById('marked-only'),
   btnResetFilter: document.getElementById('btn-reset-filter'),
   btnExportCsv: document.getElementById('btn-export-csv'),
@@ -81,6 +99,13 @@ const el = {
   timelineLabel: document.getElementById('timeline-label'),
   logHeader: document.querySelector('.log-header'),
   showFullTime: document.getElementById('show-full-time'),
+  focusSearchStrip: document.getElementById('focus-search-strip'),
+  btnFocusSearch: document.getElementById('btn-focus-search'),
+  focusSearchInput: document.getElementById('focus-search-input'),
+  btnFocusSearchClose: document.getElementById('btn-focus-search-close'),
+  btnLogScrollUp: document.getElementById('btn-log-scroll-up'),
+  btnLogScrollDown: document.getElementById('btn-log-scroll-down'),
+  btnLogScrollEnd: document.getElementById('btn-log-scroll-end'),
   virtualScroll: document.getElementById('virtual-scroll'),
   virtualSpacer: document.getElementById('virtual-spacer'),
   rowsLayer: document.getElementById('rows-layer'),
@@ -88,7 +113,6 @@ const el = {
   detailEmpty: document.getElementById('detail-empty'),
   detailPanel: document.getElementById('detail-panel'),
   btnCopyPayload: document.getElementById('btn-copy-payload'),
-  btnCopyDetail: document.getElementById('btn-copy-detail'),
   btnBookmark: document.getElementById('btn-bookmark'),
   btnAnalyzeSelected: document.getElementById('btn-analyze-selected'),
   rangeA: document.getElementById('range-a'),
@@ -97,6 +121,13 @@ const el = {
   btnAnalyzeRange: document.getElementById('btn-analyze-range'),
   aiStatus: document.getElementById('ai-status'),
   aiReport: document.getElementById('ai-report'),
+  aiConfigPanel: document.getElementById('ai-config-panel'),
+  btnAiConfigUnlock: document.getElementById('btn-ai-config-unlock'),
+  aiConfigPasswordRow: document.getElementById('ai-config-password-row'),
+  aiConfigPassword: document.getElementById('ai-config-password'),
+  btnAiConfigPasswordSubmit: document.getElementById('btn-ai-config-password-submit'),
+  aiConfigBody: document.getElementById('ai-config-body'),
+  aiConfigLockState: document.getElementById('ai-config-lock-state'),
   aiBaseUrl: document.getElementById('ai-base-url'),
   aiModel: document.getElementById('ai-model'),
   aiKey: document.getElementById('ai-key'),
@@ -104,13 +135,14 @@ const el = {
   aiAutoScan: document.getElementById('ai-auto-scan'),
   aiWindow: document.getElementById('ai-window'),
   btnSaveAi: document.getElementById('btn-save-ai'),
-  signalChart: document.getElementById('signal-chart'),
-  btnPlotSignal: document.getElementById('btn-plot-signal'),
-  diffPanel: document.getElementById('diff-panel'),
   aiChatLog: document.getElementById('ai-report'),
   aiChatInput: document.getElementById('ai-chat-input'),
   btnAiChatSend: document.getElementById('btn-ai-chat-send'),
   aiChatModeSelect: document.getElementById('ai-chat-mode-select'),
+  aiRuntimeModel: document.getElementById('ai-runtime-model'),
+  btnAiPrompt: document.getElementById('btn-ai-prompt'),
+  aiPromptPanel: document.getElementById('ai-prompt-panel'),
+  aiGuidanceInput: document.getElementById('ai-guidance-input'),
   aiChatRangePanel: document.getElementById('ai-chat-range-panel'),
   aiChatUseRange: document.getElementById('ai-chat-use-range'),
   aiChatFrom: document.getElementById('ai-chat-from'),
@@ -144,6 +176,7 @@ function wireEvents() {
   el.btnClear.addEventListener('click', resetWorkspace);
   el.btnTheme.addEventListener('click', toggleTheme);
   el.btnDocs.addEventListener('click', addDocs);
+  el.btnGuide.addEventListener('click', downloadUserGuide);
   el.btnAiFocus.addEventListener('click', toggleAiFocus);
 
   el.dropZone.addEventListener('dragover', (event) => {
@@ -190,6 +223,14 @@ function wireEvents() {
   el.btnResetFilter.addEventListener('click', resetFilters);
   el.btnExportCsv.addEventListener('click', () => exportFiltered('csv'));
   el.btnExportJson.addEventListener('click', () => exportFiltered('json'));
+  el.btnAiConfigUnlock.addEventListener('click', unlockAiConfig);
+  el.btnAiConfigPasswordSubmit.addEventListener('click', submitAiConfigPassword);
+  el.aiConfigPassword.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      submitAiConfigPassword();
+    }
+  });
   el.btnSaveAi.addEventListener('click', saveAiConfig);
   el.btnNatural.addEventListener('click', runNaturalSearch);
 
@@ -197,20 +238,39 @@ function wireEvents() {
   el.rowsLayer.addEventListener('click', handleRowClick);
   el.timeline.addEventListener('click', handleTimelineClick);
   el.minimap.addEventListener('click', handleMinimapClick);
+  el.btnFocusSearch.addEventListener('click', openFocusSearch);
+  el.btnFocusSearchClose.addEventListener('click', closeFocusSearch);
+  el.btnLogScrollUp.addEventListener('click', () => scrollLogByRows(-24));
+  el.btnLogScrollDown.addEventListener('click', () => scrollLogByRows(24));
+  el.btnLogScrollEnd.addEventListener('click', scrollLogToEnd);
+  el.focusSearchInput.addEventListener('input', () => {
+    el.searchInput.value = el.focusSearchInput.value;
+    state.currentPage = 1;
+    state.levelFilter = null;
+    state.naturalFilter = null;
+    applyFilters();
+  });
   el.showFullTime.addEventListener('change', () => {
     state.showFullLogTime = el.showFullTime.checked;
     scheduleVirtualRows();
   });
+  el.filterRangeStart.addEventListener('input', (event) => handleFilterRangeInput(event, 'from'));
+  el.filterRangeEnd.addEventListener('input', (event) => handleFilterRangeInput(event, 'to'));
+  el.btnFilterRangeClear.addEventListener('click', () => resetFilterRange(true));
 
   el.btnCopyPayload.addEventListener('click', copySelectedPayload);
-  el.btnCopyDetail.addEventListener('click', copySelectedDetail);
   el.btnBookmark.addEventListener('click', () => toggleBookmark(state.selectedId));
   el.btnAnalyzeSelected.addEventListener('click', () => setAiChatMode('selection'));
   el.btnCopyRange.addEventListener('click', copyRange);
   el.btnAnalyzeRange.addEventListener('click', selectRangeForAi);
-  el.btnPlotSignal.addEventListener('click', plotSelectedSignal);
   el.btnAiChatSend.addEventListener('click', () => sendAiChat(state.aiChatMode));
   el.aiChatModeSelect.addEventListener('change', () => setAiChatMode(el.aiChatModeSelect.value));
+  el.btnAiPrompt.addEventListener('click', toggleAiPromptPanel);
+  el.aiGuidanceInput.value = state.aiGuidance;
+  el.aiGuidanceInput.addEventListener('input', () => {
+    state.aiGuidance = el.aiGuidanceInput.value.trim();
+    saveTextSetting('bltn-ai-guidance', state.aiGuidance);
+  });
   el.btnAiChatRangeSelected.addEventListener('click', selectRangeForAi);
   el.btnAiChatRangeClear.addEventListener('click', resetAiRangeToFull);
   el.aiRangeStart.addEventListener('input', (event) => handleAiRangeInput(event, 'from'));
@@ -241,7 +301,7 @@ async function openFiles(paths) {
   el.fileList.innerHTML = paths.map((filePath) => `<div class="file-item">${escapeHtml(shortPath(filePath))}</div>`).join('');
   const result = await api.parseLogs(paths);
   if (!result.ok) {
-    el.parseStatus.textContent = result.error || 'Không khởi động được parser.';
+    el.parseStatus.textContent = result.error || 'Could not start the parser.';
   }
 }
 
@@ -253,6 +313,71 @@ function toggleAiFocus() {
 
 function syncLayoutButtons() {
   el.btnAiFocus.classList.toggle('active', el.workspace.classList.contains('log-ai-focus'));
+}
+
+function openFocusSearch() {
+  el.focusSearchInput.classList.remove('hidden');
+  el.btnFocusSearchClose.classList.remove('hidden');
+  el.focusSearchInput.value = el.searchInput.value;
+  requestAnimationFrame(() => el.focusSearchInput.focus());
+}
+
+function closeFocusSearch() {
+  el.focusSearchInput.value = '';
+  el.searchInput.value = '';
+  el.focusSearchInput.classList.add('hidden');
+  el.btnFocusSearchClose.classList.add('hidden');
+  state.currentPage = 1;
+  state.levelFilter = null;
+  state.naturalFilter = null;
+  applyFilters();
+}
+
+function scrollLogByRows(rowDelta) {
+  el.virtualScroll.scrollTop = Math.max(0, el.virtualScroll.scrollTop + rowDelta * ROW_HEIGHT);
+  scheduleVirtualRows();
+}
+
+function scrollLogToEnd() {
+  el.virtualScroll.scrollTop = Math.max(0, el.virtualScroll.scrollHeight - el.virtualScroll.clientHeight);
+  scheduleVirtualRows();
+}
+
+function toggleAiPromptPanel() {
+  const willOpen = el.aiPromptPanel.classList.contains('hidden');
+  el.aiPromptPanel.classList.toggle('hidden', !willOpen);
+  el.btnAiPrompt.classList.toggle('active', willOpen);
+  if (willOpen) requestAnimationFrame(() => el.aiGuidanceInput.focus());
+}
+
+function unlockAiConfig() {
+  if (state.aiConfigUnlocked) {
+    el.aiConfigBody.classList.toggle('hidden');
+    return;
+  }
+
+  el.aiConfigPasswordRow.classList.remove('hidden');
+  el.aiConfigLockState.textContent = 'Enter password';
+  requestAnimationFrame(() => el.aiConfigPassword.focus());
+}
+
+function submitAiConfigPassword() {
+  if (state.aiConfigUnlocked) return;
+  const password = el.aiConfigPassword.value;
+  if (password !== 'bltnteam') {
+    el.aiConfigPassword.value = '';
+    setAiStatus('AI / RAG config password is incorrect.', true);
+    requestAnimationFrame(() => el.aiConfigPassword.focus());
+    return;
+  }
+
+  state.aiConfigUnlocked = true;
+  el.aiConfigPanel.classList.remove('locked');
+  el.aiConfigPasswordRow.classList.add('hidden');
+  el.aiConfigBody.classList.remove('hidden');
+  el.aiConfigPassword.value = '';
+  el.aiConfigLockState.textContent = 'Unlocked';
+  setAiStatus('AI / RAG config unlocked.', false);
 }
 
 function handleParseEvent(event) {
@@ -298,7 +423,6 @@ function handleParseEvent(event) {
     el.parseProgress.style.width = '100%';
     el.parseStatus.textContent = `Loaded ${formatNumber(event.totalMessages)} messages in ${formatDuration(event.parseMs)}.`;
     applyFilters();
-    renderDiff();
     maybeRunConfiguredAutoScan();
     return;
   }
@@ -421,8 +545,7 @@ function hasActiveFilters() {
 
 function resetFilters() {
   el.searchInput.value = '';
-  el.timeFrom.value = '';
-  el.timeTo.value = '';
+  resetFilterRange(false);
   el.markedOnly.checked = false;
   el.caseSensitive.checked = false;
   el.regexSearch.checked = false;
@@ -445,12 +568,12 @@ function scheduleRender() {
 function renderAll() {
   applyLogColumnTemplate();
   renderStats();
-  renderDistribution();
   renderPagination();
   renderVirtualRows();
   renderTimeline();
   renderMinimap();
   renderDetail(getSelectedMessage());
+  syncFilterRangeControls();
   syncAiRangeControls();
   updateAiModeUi();
   updateChatRangeInfo();
@@ -470,26 +593,6 @@ function renderStats() {
   el.statWarns.textContent = formatNumber(warns);
   el.statEcu.textContent = formatNumber(ecuCount);
   el.statSpan.textContent = spanMs ? formatDuration(spanMs) : '-';
-}
-
-function renderDistribution() {
-  const counts = Object.fromEntries(LEVELS.map((level) => [level, 0]));
-  for (const index of state.filtered) {
-    const level = state.messages[index].level || 'Unknown';
-    counts[level] = (counts[level] || 0) + 1;
-  }
-  const max = Math.max(1, ...Object.values(counts));
-  el.distribution.innerHTML = LEVELS.map((level) => {
-    const count = counts[level] || 0;
-    const width = Math.max(2, (count / max) * 100);
-    return `
-      <div class="bar-row">
-        <span>${level}</span>
-        <div class="bar-track"><div class="bar-fill level-bg-${level}" style="width:${width}%"></div></div>
-        <span>${formatNumber(count)}</span>
-      </div>
-    `;
-  }).join('');
 }
 
 function renderPagination() {
@@ -565,7 +668,7 @@ function initLogColumnResize() {
     if (index >= cells.length - 1) return;
     const handle = document.createElement('span');
     handle.className = 'log-col-resizer';
-    handle.title = 'Kéo để đổi độ rộng cột';
+    handle.title = 'Drag to resize column';
     handle.addEventListener('pointerdown', (event) => startLogColumnResize(event, index));
     cell.appendChild(handle);
   });
@@ -680,7 +783,7 @@ function renderTimeline() {
 
   const messages = state.filtered.map((index) => state.messages[index]).filter((message) => Number.isFinite(message.timeMs));
   if (!messages.length) {
-    el.timelineLabel.textContent = 'Timeline not loaded';
+    el.timelineLabel.textContent = '';
     return;
   }
 
@@ -702,7 +805,7 @@ function renderTimeline() {
 
   const maxCount = Math.max(1, ...bins.map((bin) => bin.normal + bin.warn + bin.error + bin.ai));
   const barWidth = width / bins.length;
-  drawHourlyTicks(ctx, min, max, width, height, top, bottom);
+  drawMinuteTicks(ctx, min, max, width, height, top, bottom);
   bins.forEach((bin, index) => {
     let y = bottom;
     drawStack(ctx, index * barWidth, y, barWidth, bin.normal, maxCount, '#65b5ff', plotHeight);
@@ -714,13 +817,7 @@ function renderTimeline() {
     drawStack(ctx, index * barWidth, y, barWidth, bin.ai, maxCount, '#00b8a9', plotHeight);
   });
 
-  ctx.fillStyle = 'rgba(237,247,242,0.7)';
-  ctx.font = '11px Cascadia Code, Consolas, monospace';
-  ctx.fillText(formatTimeLabel(min), 8, 14);
-  ctx.textAlign = 'right';
-  ctx.fillText(formatTimeLabel(max), width - 8, 14);
-  ctx.textAlign = 'left';
-  el.timelineLabel.textContent = `${formatTimeLabel(min)} -> ${formatTimeLabel(max)} | ${formatDuration(span)} | hourly ticks`;
+  el.timelineLabel.textContent = '';
 }
 
 function drawStack(ctx, x, yBottom, barWidth, count, maxCount, color, plotHeight) {
@@ -730,13 +827,21 @@ function drawStack(ctx, x, yBottom, barWidth, count, maxCount, color, plotHeight
   ctx.fillRect(x, yBottom - barHeight, Math.max(1, barWidth - 1), barHeight);
 }
 
-function drawHourlyTicks(ctx, min, max, width, height, top, bottom) {
-  const hourMs = 60 * 60 * 1000;
-  const firstHour = Math.ceil(min / hourMs) * hourMs;
-  if (!Number.isFinite(firstHour) || firstHour > max) return;
+function drawMinuteTicks(ctx, min, max, width, height, top, bottom) {
+  const minuteMs = 60 * 1000;
+  const firstMinute = Math.ceil(min / minuteMs) * minuteMs;
+  if (!Number.isFinite(firstMinute)) return;
+  if (firstMinute > max) {
+    ctx.save();
+    ctx.font = '10px Cascadia Code, Consolas, monospace';
+    ctx.fillStyle = 'rgba(237,247,242,0.56)';
+    ctx.fillText(formatMinuteTick(min), 8, height - 7);
+    ctx.restore();
+    return;
+  }
 
-  const hourCount = Math.max(1, Math.floor((max - firstHour) / hourMs) + 1);
-  const labelEvery = Math.max(1, Math.ceil(hourCount / Math.max(1, Math.floor(width / 88))));
+  const minuteCount = Math.max(1, Math.floor((max - firstMinute) / minuteMs) + 1);
+  const labelEvery = Math.max(1, Math.ceil(minuteCount / Math.max(1, Math.floor(width / 58))));
   ctx.save();
   ctx.font = '10px Cascadia Code, Consolas, monospace';
   ctx.textAlign = 'left';
@@ -744,14 +849,14 @@ function drawHourlyTicks(ctx, min, max, width, height, top, bottom) {
   ctx.fillStyle = 'rgba(237,247,242,0.56)';
 
   let index = 0;
-  for (let tick = firstHour; tick <= max; tick += hourMs) {
+  for (let tick = firstMinute; tick <= max; tick += minuteMs) {
     const x = ((tick - min) / Math.max(1, max - min)) * width;
     ctx.beginPath();
     ctx.moveTo(x, top);
     ctx.lineTo(x, bottom);
     ctx.stroke();
     if (index % labelEvery === 0) {
-      ctx.fillText(formatHourTick(tick), Math.min(width - 46, x + 3), height - 7);
+      ctx.fillText(formatMinuteTick(tick), Math.min(width - 46, x + 3), height - 7);
     }
     index += 1;
   }
@@ -790,19 +895,8 @@ function renderDetail(message) {
   el.detailPanel.innerHTML = `
     ${kv('File', message.fileName)}
     ${kv('Timestamp', message.time)}
-    ${kv('Delta', formatDelta(message.deltaMs))}
-    ${kv('ECU/APID/CTID', `${message.ecu}/${message.apid}/${message.ctid}`)}
-    ${kv('Level', message.level)}
-    ${kv('Type', `${message.type}/${message.subtype}`)}
-    ${kv('Session', message.session ?? '-')}
     ${kv('Counter', message.counter ?? '-')}
-    ${kv('Offset', message.fileOffset)}
-    ${kv('Length', `${message.length} bytes`)}
-    ${kv('Message ID', message.messageId || '-')}
-    ${kv('Decode', message.decodeStatus || '-')}
-    <div class="raw-box">${escapeHtml(message.payload || '')}</div>
-    <div class="raw-box">ASCII\n${escapeHtml(message.payloadAscii || '')}</div>
-    <div class="raw-box">HEX${message.payloadHexTruncated ? ' (truncated)' : ''}\n${escapeHtml(message.payloadHex || '')}</div>
+    <div class="raw-box">Payload\n${escapeHtml(message.payload || '')}</div>
   `;
 }
 
@@ -819,44 +913,22 @@ function renderFileList() {
   `).join('');
 }
 
-function renderDiff() {
-  const files = state.files.filter(Boolean);
-  if (files.length < 2) {
-    el.diffPanel.textContent = 'Open two files to view signature diff.';
-    return;
-  }
-
-  const groups = new Map();
-  for (const message of state.messages) {
-    const signature = `${message.level}|${message.ecu}|${message.apid}|${message.ctid}|${normalizePayload(message.payload)}`;
-    if (!groups.has(signature)) groups.set(signature, new Set());
-    groups.get(signature).add(message.fileIndex);
-  }
-
-  const onlyFirst = [];
-  const onlySecond = [];
-  for (const [signature, fileSet] of groups.entries()) {
-    if (fileSet.size === 1 && fileSet.has(0)) onlyFirst.push(signature);
-    if (fileSet.size === 1 && fileSet.has(1)) onlySecond.push(signature);
-  }
-
-  el.diffPanel.innerHTML = [
-    `Unique in ${files[0].fileName}: ${onlyFirst.length}`,
-    ...onlyFirst.slice(0, 8).map((item) => `  - ${escapeHtml(item.slice(0, 150))}`),
-    '',
-    `Unique in ${files[1].fileName}: ${onlySecond.length}`,
-    ...onlySecond.slice(0, 8).map((item) => `  - ${escapeHtml(item.slice(0, 150))}`)
-  ].join('\n');
-}
-
 async function loadAiConfig() {
   state.aiConfig = await api.getAiConfig();
   el.aiBaseUrl.value = state.aiConfig.baseUrl || '';
   el.aiModel.value = state.aiConfig.model || '';
+  setRuntimeModelSelection();
   el.aiHeaders.value = JSON.stringify(state.aiConfig.headers || {}, null, 2);
   el.aiAutoScan.checked = Boolean(state.aiConfig.autoScan);
   el.aiWindow.value = state.aiConfig.contextWindowMs || 500;
   el.aiKey.placeholder = state.aiConfig.apiKeySet ? `Saved ${state.aiConfig.apiKeyPreview}` : 'Paste API key';
+}
+
+function setRuntimeModelSelection(model) {
+  if (!el.aiRuntimeModel) return;
+  const value = String(model || DEFAULT_RUNTIME_MODEL).trim();
+  const hasOption = Array.from(el.aiRuntimeModel.options).some((option) => option.value === value);
+  el.aiRuntimeModel.value = hasOption ? value : DEFAULT_RUNTIME_MODEL;
 }
 
 async function saveAiConfig() {
@@ -879,6 +951,7 @@ async function saveAiConfig() {
   });
   el.aiKey.value = '';
   el.aiKey.placeholder = state.aiConfig.apiKeySet ? `Saved ${state.aiConfig.apiKeyPreview}` : 'Paste API key';
+  setRuntimeModelSelection();
   setAiStatus('AI config saved.', false);
 }
 
@@ -897,21 +970,82 @@ async function addDocs() {
   el.docsStatus.textContent = `Docs: ${status.chunks || 0} chunks, ${status.terms || 0} terms`;
 }
 
+async function downloadUserGuide() {
+  const result = await api.saveExport({
+    title: 'Download BLTN-Analysis Log user guide',
+    defaultPath: 'BLTN-Analysis-Log-User-Guide.md',
+    filters: [{ name: 'Markdown', extensions: ['md'] }],
+    content: buildUserGuideContent()
+  });
+  if (result.ok) {
+    el.parseStatus.textContent = `Saved user guide: ${result.filePath}`;
+  }
+}
+
+function buildUserGuideContent() {
+  return [
+    '# BLTN-Analysis Log User Guide',
+    '',
+    '## 1. Open and read logs',
+    '- Click `Open DLT` or drop `.dlt`, `.log`, or `.bin` files into the app.',
+    '- Large logs are parsed in the background and rendered with virtual scrolling.',
+    '- Use `Log AI Focus` to split the screen: logs on the left, AI Diagnostic Report on the right.',
+    '',
+    '## 2. Log table',
+    '- `Mark`: bookmark an important row.',
+    '- `#`: message order.',
+    '- `Time`: shows `HH:mm:ss` by default; tick the checkbox beside `Time` to show the full date-time.',
+    '- `Delta`: time gap from the previous message.',
+    '- `Payload`: message content. In `Log AI Focus`, hover a long payload to inspect more content.',
+    '- Drag the header separators to resize columns.',
+    '',
+    '## 3. Search and filter',
+    '- The left panel has `Search / Filter` for payload, ECU/APID/CTID, file, regex, time range, or bookmarks.',
+    '- In `Log AI Focus`, click the small `Search` button above the table for quick search.',
+    '- `AI Search` converts a natural-language query into a local filter.',
+    '',
+    '## 4. AI Diagnostic Report',
+    '- Choose a mode beside `Send`: `Current Row`, `Time Range`, or `Potential Bug`.',
+    '- `Time Range` shows a two-handle slider for the log window sent to AI.',
+    '- `Potential Bug` sends the full message context for whole-log analysis.',
+    '- When `Send` is pressed, the button stays locked until AI returns a response or an error.',
+    '- The app sends only `HH:mm:ss` time and `payload` to reduce tokens.',
+    '',
+    '## 5. AI prompt guidance',
+    '- Click `Prompt` next to `AI Diagnostic Report` to enter response guidance.',
+    '- If the guidance is empty, the default diagnostic prompt is used.',
+    '- Example: "Answer in 4 sections, prioritize root cause, cite reproduction conditions."',
+    '',
+    '## 6. ECU docs / RAG',
+    '- Click `Add ECU Docs` to load ECU/FIBEX/ARXML/TXT/DOCX documentation.',
+    '- AI may use several snippets from one document, for example `8 snippets / 1 ECU document`.',
+    '- `AI / RAG Config` is locked by default. Enter the team password to edit advanced settings.',
+    '',
+    '## 7. Export data',
+    '- Use `Export CSV` or `Export JSON` in Search / Filter to save currently filtered rows.',
+    '- Use `Copy Payload` in Message Detail to copy the selected row payload.',
+    '',
+    '## 8. Notes',
+    '- Non-verbose DLT requires FIBEX/ARXML mapping for complete payload decoding.',
+    '- If whole-log AI analysis is too slow, switch to `Time Range` to reduce context.'
+  ].join('\n');
+}
+
 async function maybeRunConfiguredAutoScan() {
   const config = await api.getAiConfig();
   state.aiConfig = config;
   if (config.autoScan && config.apiKeySet) {
     setAiChatMode('errors');
-    setAiStatus('Đã chọn mode Bug tiềm ẩn. AI sẽ chỉ chạy khi bạn bấm Send.', false);
+    setAiStatus('Potential Bug mode is selected. AI will run only when you press Send.', false);
   }
 }
 
 async function runAutoAiScan() {
   if (!state.messages.length) {
-    setAiStatus('Chưa có log để auto-scan. Hãy mở file DLT/log trước.', true);
+    setAiStatus('No logs are available for auto-scan. Open a DLT/log file first.', true);
     renderAiObject('Auto Scan', {
-      summary: 'Chưa có dữ liệu log.',
-      recommended_action: 'Mở file log trước, sau đó bấm Run AI Auto Scan.'
+      summary: 'No log data is available.',
+      recommended_action: 'Open a log file first, then run AI Auto Scan.'
     });
     return;
   }
@@ -929,15 +1063,15 @@ async function runAutoAiScan() {
   }
 
   if (!targets.length) {
-    setAiStatus('Auto-scan không tìm thấy message đủ điều kiện để phân tích.', true);
+    setAiStatus('Auto-scan did not find enough candidate messages to analyze.', true);
     renderAiObject('Auto Scan', {
-      summary: 'Không tìm thấy Error/Fatal/Warn hoặc keyword nghi ngờ trong log.',
-      recommended_action: 'Dùng Search hoặc chọn thủ công một khoảng thời gian A-B rồi bấm AI A-B.'
+      summary: 'No Error/Fatal/Warn or suspicious keywords were found in the log.',
+      recommended_action: 'Use Search or manually select an A-B time range.'
     });
     return;
   }
 
-  setAiStatus(`Auto-scan đang phân tích ${targets.length} cụm nghi ngờ...`, false);
+  setAiStatus(`Auto-scan is analyzing ${targets.length} suspicious cluster(s)...`, false);
   for (const cluster of targets.slice(0, 10)) {
     for (const message of buildLocalContext(cluster.fromMs, cluster.toMs, Number(el.aiWindow.value || 500), 220)) {
       if (!seen.has(message.id)) {
@@ -948,11 +1082,11 @@ async function runAutoAiScan() {
   }
 
   await runAiAnalysis({
-    title: 'Báo cáo chẩn đoán tổng thể bằng Auto-scan',
+    title: 'Overall diagnostic report from Auto-scan',
     mode: 'auto-scan',
     query: clusters.length
-      ? 'Phân tích tất cả cụm Error/Fatal và tìm nguyên nhân gốc có khả năng cao nhất của Built-in Cam ECU. Trả lời bằng tiếng Việt.'
-      : 'Log không có Error/Fatal rõ ràng. Hãy phân tích các Warn/keyword nghi ngờ và tìm bất thường tiềm ẩn của Built-in Cam ECU. Trả lời bằng tiếng Việt.',
+      ? 'Analyze all Error/Fatal clusters and find the most likely root cause for the Built-in Cam ECU. Answer in the same language as the user question.'
+      : 'The log has no clear Error/Fatal rows. Analyze Warn/suspicious keywords and find potential anomalies in the Built-in Cam ECU. Answer in the same language as the user question.',
     messages: contextMessages,
     stats: collectStats(),
     selectedIds: targets.flatMap((cluster) => cluster.ids)
@@ -964,9 +1098,9 @@ async function analyzeSelected() {
   if (!message) return;
   const context = buildLocalContext(message.timeMs, message.timeMs, Number(el.aiWindow.value || 500), 700);
   await runAiAnalysis({
-    title: `Phân tích message ${message.id}`,
+    title: `Analyze message ${message.id}`,
     mode: 'selected-message',
-    query: `Phân tích lỗi/triệu chứng trong message này và trả lời bằng tiếng Việt: ${message.level} ${message.ecu}/${message.apid}/${message.ctid} ${message.payload}`,
+    query: `Analyze the issue or symptom in this message and answer in the same language as the user question: ${message.level} ${message.ecu}/${message.apid}/${message.ctid} ${message.payload}`,
     messages: context,
     selectedIds: [message.id],
     fromMs: message.timeMs,
@@ -983,9 +1117,9 @@ async function analyzeRange() {
   }
   const context = buildLocalContext(range.fromMs, range.toMs, Number(el.aiWindow.value || 500), 1200);
   await runAiAnalysis({
-    title: `Phân tích khoảng ${formatTimeLabel(range.fromMs)} -> ${formatTimeLabel(range.toMs)}`,
+    title: `Analyze range ${formatTimeLabel(range.fromMs)} -> ${formatTimeLabel(range.toMs)}`,
     mode: 'time-range',
-    query: 'Phân tích khoảng thời gian A-B để tìm lỗi Built-in Cam ECU và nguyên nhân gốc. Trả lời bằng tiếng Việt.',
+    query: 'Analyze the A-B time range to find Built-in Cam ECU issues and root cause. Answer in the same language as the user question.',
     messages: context,
     fromMs: range.fromMs,
     toMs: range.toMs,
@@ -999,13 +1133,13 @@ async function sendAiChat(mode) {
   const typedQuestion = el.aiChatInput.value.trim();
   const question = typedQuestion || defaultChatQuestion(mode);
   if (!question) {
-    setAiStatus('Hãy nhập câu hỏi cho AI hoặc chọn một quick action.', true);
+    setAiStatus('Enter a question for AI or choose a mode.', true);
     return;
   }
 
   const rawContextMessages = buildChatContextMessages(mode);
   if (!rawContextMessages.length) {
-    setAiStatus('Chưa có log context để gửi AI. Hãy mở file log trước.', true);
+    setAiStatus('No log context is available. Open a log file first.', true);
     return;
   }
   const contextMessages = rawContextMessages.map(toAiMessage);
@@ -1014,28 +1148,29 @@ async function sendAiChat(mode) {
   const estimatedContextMessages = Math.min(contextMessages.length, maxLogLines);
 
   appendChatBubble('user', question, estimatedContextMessages);
-  const pendingBubble = appendChatBubble('assistant', 'AI đang phân tích context và chờ phản hồi...', estimatedContextMessages);
+  const pendingBubble = appendChatBubble('assistant', 'AI is analyzing the context and waiting for the full response...', estimatedContextMessages);
   el.aiChatInput.value = '';
   setAiSending(true);
-  setAiStatus(`AI đang xử lý chat với tối đa ${formatNumber(estimatedContextMessages)} message context...`, false);
+  setAiStatus(`AI is processing up to ${formatNumber(estimatedContextMessages)} context messages...`, false);
 
   try {
     const response = await api.chatWithAi({
       question: aiQuestion,
       mode,
+      model: el.aiRuntimeModel.value || '',
       messages: contextMessages,
       stats: collectAiStats(mode, rawContextMessages),
       maxLogLines
     });
     if (!response.ok) {
-      updateChatBubble(pendingBubble, 'assistant', `Lỗi AI: ${response.error || 'Không gọi được AI.'}`);
-      setAiStatus(response.error || 'AI chat thất bại.', true);
+      updateChatBubble(pendingBubble, 'assistant', `AI error: ${response.error || 'AI call failed.'}`);
+      setAiStatus(response.error || 'AI chat failed.', true);
       return;
     }
 
     const resultText = String(response.result || '').trim();
     if (!resultText) {
-      throw new Error('AI đã trả về response rỗng. Chưa coi là hoàn tất; hãy thử lại hoặc giảm phạm vi nếu model bị quá tải context.');
+      throw new Error('AI returned an empty response. The chat is not complete; try again or reduce the range if the model is overloaded.');
     }
 
     const responseMeta = {
@@ -1044,10 +1179,10 @@ async function sendAiChat(mode) {
       docSources: response.promptStats?.docSources || 0
     };
     updateChatBubble(pendingBubble, 'assistant', resultText, responseMeta.contextMessages, responseMeta.docs, responseMeta.docSources);
-    setAiStatus(`AI chat xong. Đã gửi ${formatNumber(responseMeta.contextMessages)} message và ${formatAiDocUsage(responseMeta)}.`, false);
+    setAiStatus(`AI chat complete. Sent ${formatNumber(responseMeta.contextMessages)} messages and ${formatAiDocUsage(responseMeta)}.`, false);
   } catch (error) {
-    updateChatBubble(pendingBubble, 'assistant', `Lỗi AI: ${error.message}`);
-    setAiStatus(`AI chat lỗi: ${error.message}`, true);
+    updateChatBubble(pendingBubble, 'assistant', `AI error: ${error.message}`);
+    setAiStatus(`AI chat error: ${error.message}`, true);
   } finally {
     setAiSending(false);
   }
@@ -1077,21 +1212,21 @@ function updateChatRangeInfo() {
   if (state.aiChatMode === 'selection') {
     const selected = getSelectedMessage();
     el.aiChatRangeInfo.textContent = selected
-      ? `Dòng #${selected.id}, kèm message lân cận theo thời gian`
-      : 'Chưa chọn dòng log';
+      ? `Row #${selected.id} with nearby messages`
+      : 'No row selected';
     return;
   }
   if (state.aiChatMode === 'errors') {
-    el.aiChatRangeInfo.textContent = `${formatNumber(state.messages.length)} message toàn log`;
+    el.aiChatRangeInfo.textContent = `${formatNumber(state.messages.length)} full-log messages`;
     return;
   }
   const range = resolveChatRange();
   if (!range) {
-    el.aiChatRangeInfo.textContent = 'Chưa chọn khoảng thời gian';
+    el.aiChatRangeInfo.textContent = 'No time range selected';
     return;
   }
   const count = countMessagesInRange(range.fromMs, range.toMs);
-  el.aiChatRangeInfo.textContent = `${formatNumber(count)} message trong khoảng đã chọn`;
+  el.aiChatRangeInfo.textContent = `${formatNumber(count)} messages in selected range`;
 }
 
 function buildChatContextMessages(mode) {
@@ -1146,24 +1281,26 @@ function buildFilteredContextMessages(limit) {
 
 function defaultChatQuestion(mode) {
   if (mode === 'selection') {
-    return 'Hãy phân tích dòng log hiện tại và các message lân cận. Trả lời đúng 4 mục: xác thực có phải lỗi không, nguyên nhân vì sao lỗi, hậu quả lỗi, cách tái hiện lỗi.';
+    return 'Analyze the current log row and nearby messages. If this is a suspected bug, answer in 4 sections: whether it is a real issue, root cause, impact, and reproduction steps.';
   }
   if (mode === 'range') {
-    return 'Hãy phân tích khoảng thời gian đã chọn. Trả lời đúng 4 mục: xác thực có phải lỗi không, nguyên nhân vì sao lỗi, hậu quả lỗi, cách tái hiện lỗi.';
+    return 'Analyze the selected time range. If this is a suspected bug, answer in 4 sections: whether it is a real issue, root cause, impact, and reproduction steps.';
   }
   if (mode === 'errors') {
-    return 'Tôi nghi ngờ có bug tiềm ẩn. Hãy quét toàn bộ timeline + payload để tìm lỗi quan trọng nhất và trả lời đúng 4 mục: xác thực có phải lỗi không, nguyên nhân vì sao lỗi, hậu quả lỗi, cách tái hiện lỗi.';
+    return 'I suspect a potential bug. Scan the full timeline and payloads, find the most important issue, and answer in 4 sections: whether it is a real issue, root cause, impact, and reproduction steps.';
   }
-  return 'Hãy phân tích context log hiện tại và trả lời theo cấu trúc chẩn đoán lỗi.';
+  return 'Analyze the current log context and respond as an ECU diagnostic engineer.';
 }
 
 function withHiddenAiInstructions(question, mode) {
   const range = mode === 'range' ? resolveChatRange() : null;
   const rangeText = range ? `Range: ${formatTimeLabel(range.fromMs)} -> ${formatTimeLabel(range.toMs)}.` : '';
+  const guidance = String(state.aiGuidance || '').trim();
   return [
     question,
+    guidance ? `\nUser response guidance:\n${guidance}` : '',
     '',
-    'Yeu cau an cua UI: tu dung timeline/sequence tu context, neu co nghi van loi thi luon neu cach tai hien/sequence tai hien ngan gon. Khong can nguoi dung bam nut rieng cho sequence hay reproduction.',
+    'Hidden UI requirement: answer in the same language as the user question. If the user writes Vietnamese, answer Vietnamese. If the user writes English, answer English. Translate section titles into the answer language. Use the timeline/payload context directly. If this is a suspected bug, include concise reproduction or sequence conditions without requiring another UI action.',
     rangeText
   ].filter(Boolean).join('\n');
 }
@@ -1194,6 +1331,126 @@ function updateAiModeUi() {
   }
 }
 
+function syncFilterRangeControls() {
+  if (!el.filterRangeStart || !el.filterRangeEnd) return;
+  if (!Number.isFinite(state.firstTimeMs) || !Number.isFinite(state.lastTimeMs)) {
+    el.filterRangeStart.disabled = true;
+    el.filterRangeEnd.disabled = true;
+    el.filterRangeStart.value = '0';
+    el.filterRangeEnd.value = '0';
+    el.filterRangeFromLabel.textContent = '-';
+    el.filterRangeToLabel.textContent = '-';
+    el.filterRangeSelection.style.left = '0%';
+    el.filterRangeSelection.style.width = '0%';
+    el.filterRangeLimits.textContent = 'No logs loaded';
+    el.timeFrom.value = '';
+    el.timeTo.value = '';
+    return;
+  }
+
+  const min = state.firstTimeMs;
+  const max = Math.max(min, state.lastTimeMs);
+  const boundsChanged = state.filterRange.min !== min || state.filterRange.max !== max;
+  state.filterRange.min = min;
+  state.filterRange.max = max;
+  if (boundsChanged || !state.filterRange.dirty || !Number.isFinite(state.filterRange.from) || !Number.isFinite(state.filterRange.to)) {
+    state.filterRange.from = min;
+    state.filterRange.to = max;
+  }
+
+  const step = getAiRangeStep(max - min);
+  for (const input of [el.filterRangeStart, el.filterRangeEnd]) {
+    input.min = String(min);
+    input.max = String(max);
+    input.step = String(step);
+    input.disabled = false;
+  }
+  state.filterRange.from = clampNumber(state.filterRange.from, min, max);
+  state.filterRange.to = clampNumber(state.filterRange.to, min, max);
+  if (state.filterRange.from > state.filterRange.to) {
+    const tmp = state.filterRange.from;
+    state.filterRange.from = state.filterRange.to;
+    state.filterRange.to = tmp;
+  }
+  applyFilterRangeValues();
+}
+
+function handleFilterRangeInput(_event, edge) {
+  state.filterRange.dirty = true;
+  let from = Number(el.filterRangeStart.value);
+  let to = Number(el.filterRangeEnd.value);
+  if (edge === 'from' && from > to) to = from;
+  if (edge === 'to' && to < from) from = to;
+  setFilterRange(from, to, true);
+  state.currentPage = 1;
+  state.levelFilter = null;
+  state.naturalFilter = null;
+  applyFilters();
+}
+
+function resetFilterRange(render = true) {
+  state.filterRange.dirty = false;
+  if (Number.isFinite(state.firstTimeMs) && Number.isFinite(state.lastTimeMs)) {
+    setFilterRange(state.firstTimeMs, state.lastTimeMs, false);
+  } else {
+    state.filterRange.from = null;
+    state.filterRange.to = null;
+    el.timeFrom.value = '';
+    el.timeTo.value = '';
+  }
+  if (render) {
+    state.currentPage = 1;
+    applyFilters();
+  }
+}
+
+function setFilterRange(fromMs, toMs, dirty) {
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) return;
+  const min = Number.isFinite(state.filterRange.min) ? state.filterRange.min : Math.min(fromMs, toMs);
+  const max = Number.isFinite(state.filterRange.max) ? state.filterRange.max : Math.max(fromMs, toMs);
+  state.filterRange.from = clampNumber(Math.min(fromMs, toMs), min, max);
+  state.filterRange.to = clampNumber(Math.max(fromMs, toMs), min, max);
+  state.filterRange.dirty = Boolean(dirty);
+  applyFilterRangeValues();
+}
+
+function applyFilterRangeValues() {
+  const from = Number.isFinite(state.filterRange.from) ? state.filterRange.from : 0;
+  const to = Number.isFinite(state.filterRange.to) ? state.filterRange.to : from;
+  el.filterRangeStart.value = String(from);
+  el.filterRangeEnd.value = String(to);
+  el.filterRangeFromLabel.textContent = Number.isFinite(state.filterRange.from) ? formatTimeLabel(from) : '-';
+  el.filterRangeToLabel.textContent = Number.isFinite(state.filterRange.to) ? formatTimeLabel(to) : '-';
+  el.timeFrom.value = state.filterRange.dirty ? String(from) : '';
+  el.timeTo.value = state.filterRange.dirty ? String(to) : '';
+  if (Number.isFinite(state.filterRange.min) && Number.isFinite(state.filterRange.max)) {
+    const span = Math.max(1, state.filterRange.max - state.filterRange.min);
+    const left = ((Math.min(from, to) - state.filterRange.min) / span) * 100;
+    const width = ((Math.max(from, to) - Math.min(from, to)) / span) * 100;
+    el.filterRangeSelection.style.left = `${clampNumber(left, 0, 100)}%`;
+    el.filterRangeSelection.style.width = `${clampNumber(width, 0, 100)}%`;
+    el.filterRangeLimits.textContent = state.filterRange.dirty
+      ? `${formatHourTick(from)} -> ${formatHourTick(to)}`
+      : 'Full log';
+  }
+}
+
+function syncFilterRangeFromHiddenInputs() {
+  const fromMs = resolveTimeInput(el.timeFrom.value, false);
+  const toMs = resolveTimeInput(el.timeTo.value, false);
+  if (Number.isFinite(fromMs) || Number.isFinite(toMs)) {
+    const fallbackFrom = Number.isFinite(state.firstTimeMs) ? state.firstTimeMs : fromMs;
+    const fallbackTo = Number.isFinite(state.lastTimeMs) ? state.lastTimeMs : toMs;
+    setFilterRange(
+      Number.isFinite(fromMs) ? fromMs : fallbackFrom,
+      Number.isFinite(toMs) ? toMs : fallbackTo,
+      true
+    );
+  } else if (!el.timeFrom.value && !el.timeTo.value) {
+    resetFilterRange(false);
+  }
+}
+
 function syncAiRangeControls() {
   if (!el.aiRangeStart || !el.aiRangeEnd) return;
   if (!Number.isFinite(state.firstTimeMs) || !Number.isFinite(state.lastTimeMs)) {
@@ -1205,7 +1462,7 @@ function syncAiRangeControls() {
     el.aiRangeToLabel.textContent = '-';
     el.aiRangeSelection.style.left = '0%';
     el.aiRangeSelection.style.width = '0%';
-    el.aiRangeLimits.textContent = 'Chưa có log';
+    el.aiRangeLimits.textContent = 'No logs loaded';
     return;
   }
 
@@ -1355,7 +1612,7 @@ function updateChatBubble(bubble, role, text, contextCount = null, docCount = nu
   if (contextCount !== null) meta.push(`${formatNumber(contextCount)} log messages`);
   if (docCount !== null) meta.push(formatAiDocUsage({ docs: docCount, docSources: docSourceCount }));
   bubble.innerHTML = `
-    <strong>${role === 'user' ? 'Bạn' : 'AI'}</strong>
+    <strong>${role === 'user' ? 'You' : 'AI'}</strong>
     ${meta.length ? `<span class="chat-meta">${escapeHtml(meta.join(' | '))}</span>` : ''}
     <p>${escapeHtml(String(text || '')).replace(/\n/g, '<br>')}</p>
   `;
@@ -1365,30 +1622,31 @@ function updateChatBubble(bubble, role, text, contextCount = null, docCount = nu
 function formatAiDocUsage(meta = {}) {
   const docs = Number(meta.docs || 0);
   const sources = Number(meta.docSources || 0);
-  if (!docs) return '0 đoạn trích ECU';
+  if (!docs) return '0 ECU snippets';
   return sources
-    ? `${formatNumber(docs)} đoạn trích / ${formatNumber(sources)} tài liệu ECU`
-    : `${formatNumber(docs)} đoạn trích ECU`;
+    ? `${formatNumber(docs)} snippets / ${formatNumber(sources)} ECU document(s)`
+    : `${formatNumber(docs)} ECU snippets`;
 }
 
 function setAiSending(isSending) {
   state.aiSending = Boolean(isSending);
   el.btnAiChatSend.disabled = isSending;
   el.aiChatModeSelect.disabled = isSending;
-  el.btnAiChatSend.textContent = isSending ? 'Đợi...' : 'Send';
+  el.aiRuntimeModel.disabled = isSending;
+  el.btnAiChatSend.textContent = isSending ? 'Waiting...' : 'Send';
 }
 
 async function runAiAnalysis(payload) {
-  setAiStatus('AI đang phân tích...', false);
+  setAiStatus('AI is analyzing...', false);
   try {
     const response = await api.analyzeWithAi(payload);
     if (!response.ok) {
-      setAiStatus(response.error || 'AI phân tích thất bại.', true);
+      setAiStatus(response.error || 'AI analysis failed.', true);
       return;
     }
     const enrichedResult = enrichAiResult(response.result, payload);
     applyAiResult(enrichedResult);
-    setAiStatus(`AI đã phân tích xong. Context: ${response.promptStats.contextMessages} message, docs: ${response.promptStats.docs}.`, false);
+    setAiStatus(`AI analysis complete. Context: ${response.promptStats.contextMessages} messages, docs: ${response.promptStats.docs}.`, false);
   } catch (error) {
     setAiStatus(`AI error: ${error.message}`, true);
   }
@@ -1414,62 +1672,62 @@ function enrichAiResult(result, requestPayload) {
     }));
   }
 
-  if (isSparseVietnameseField(next.summary, 'tóm tắt') && first) {
-    next.summary = `AI đã đánh dấu ${ids.length || 1} message nghi ngờ trong cửa sổ log. Message nổi bật: #${first.id} ${first.level || 'Unknown'} ${first.ecu || '-'}/${first.apid || '-'}/${first.ctid || '-'} tại ${first.time || '-'} với payload: ${(first.payload || '').slice(0, 220)}.`;
+  if (isSparseFallbackField(next.summary, 'summary') && first) {
+    next.summary = `AI marked ${ids.length || 1} suspicious message(s) in the log window. Notable message: #${first.id} ${first.level || 'Unknown'} ${first.ecu || '-'}/${first.apid || '-'}/${first.ctid || '-'} at ${first.time || '-'} with payload: ${(first.payload || '').slice(0, 220)}.`;
   }
 
-  if (isSparseVietnameseField(next.error_verification, 'xác thực') && first) {
-    next.error_verification = `Có dấu hiệu lỗi/nghi vấn quanh message #${first.id} tại ${first.time || '-'}, nhưng cần đối chiếu thêm tài liệu và log lân cận để xác thực tuyệt đối.`;
+  if (isSparseFallbackField(next.error_verification, 'verification') && first) {
+    next.error_verification = `There is a possible issue around message #${first.id} at ${first.time || '-'}, but more adjacent log evidence and documentation are needed for confirmation.`;
   }
 
-  if (isSparseVietnameseField(next.root_cause, 'nguyên nhân') && first) {
-    next.root_cause = `Chưa đủ bằng chứng để kết luận tuyệt đối, nhưng điểm nghi ngờ chính nằm ở luồng ${first.ecu || '-'}/${first.apid || '-'}/${first.ctid || '-'} quanh message #${first.id}. Cần đối chiếu các message trước/sau, trạng thái camera/storage/network và mapping non-verbose nếu có.`;
+  if (isSparseFallbackField(next.root_cause, 'root cause') && first) {
+    next.root_cause = `There is not enough evidence for a final conclusion, but the main suspicion is in ${first.ecu || '-'}/${first.apid || '-'}/${first.ctid || '-'} around message #${first.id}. Compare preceding/following messages, camera/storage/network state, and non-verbose mapping if available.`;
   }
 
-  if (isSparseVietnameseField(next.impact, 'hậu quả')) {
-    next.impact = 'Chưa đủ dữ liệu để lượng hóa hậu quả; cần kiểm tra triệu chứng sau vùng nghi ngờ như timeout, mất frame, reset, degraded mode hoặc DTC phát sinh.';
+  if (isSparseFallbackField(next.impact, 'impact')) {
+    next.impact = 'There is not enough data to quantify impact; check for symptoms after the suspicious window such as timeout, dropped frames, reset, degraded mode, or new DTCs.';
   }
 
   if (!Array.isArray(next.reproduction_steps) || !next.reproduction_steps.length) {
     next.reproduction_steps = [
-      'Replay hoặc tái tạo điều kiện quanh các message nghi ngờ theo đúng thứ tự thời gian.',
-      'Mở rộng cửa sổ thời gian trước/sau lỗi và kiểm tra điều kiện kích hoạt trong tài liệu ECU.',
-      'Xác nhận lại bằng log mới có cùng payload/timing hoặc DTC tương ứng.'
+      'Replay or recreate the conditions around the suspicious messages in the same time order.',
+      'Expand the time window before/after the issue and check trigger conditions in ECU documentation.',
+      'Confirm with a new log that has the same payload/timing or matching DTCs.'
     ];
   }
 
-  if (isSparseVietnameseField(next.recommended_action, 'khuyến nghị')) {
+  if (isSparseFallbackField(next.recommended_action, 'recommendation')) {
     next.recommended_action = ids.length
-      ? `Kiểm tra các message #${ids.slice(0, 12).join(', ')} trên timeline, mở rộng window phân tích lên 2000-5000 ms nếu lỗi kéo dài, rồi đối chiếu với tài liệu ECU/FIBEX/ARXML để xác nhận nguyên nhân.`
-      : 'Mở rộng khoảng thời gian A-B quanh vùng nghi ngờ, kiểm tra warning/error liên tiếp, và nạp thêm FIBEX/ARXML nếu log là non-verbose.';
+      ? `Inspect messages #${ids.slice(0, 12).join(', ')} on the timeline, expand the analysis window to 2000-5000 ms if the issue spans longer, then compare with ECU/FIBEX/ARXML documentation.`
+      : 'Expand the A-B time range around the suspicious area, check consecutive warnings/errors, and load FIBEX/ARXML if the log is non-verbose.';
   }
 
   if (!Array.isArray(next.next_steps) || !next.next_steps.length) {
     next.next_steps = [
-      'Mở rộng context quanh lỗi và chạy lại AI A-B.',
-      'Kiểm tra các message đã bookmark/highlight trên timeline.',
-      'Nạp thêm FIBEX/ARXML nếu payload non-verbose chưa decode được.'
+      'Expand context around the issue and rerun A-B AI analysis.',
+      'Inspect bookmarked/highlighted messages on the timeline.',
+      'Load FIBEX/ARXML if non-verbose payloads are not decoded.'
     ];
   }
 
   return next;
 }
 
-function isSparseVietnameseField(value, kind) {
+function isSparseFallbackField(value, kind) {
   const text = String(value || '').trim().toLowerCase();
   if (!text) return true;
-  if (text.includes('ai chưa')) return true;
+  if (text.includes('ai has not')) return true;
   if (text.includes('did not provide')) return true;
   if (text.includes('not explicit')) return true;
   if (text.includes('collect more context')) return true;
-  if (kind === 'tóm tắt' && text.length < 12) return true;
+  if (kind === 'summary' && text.length < 12) return true;
   return false;
 }
 
 async function runNaturalSearch() {
   const query = el.naturalQuery.value.trim();
   if (!query) return;
-  setAiStatus('AI đang chuyển câu tìm kiếm tự nhiên thành filter...', false);
+  setAiStatus('AI is converting the natural-language query into a filter...', false);
   const localPlan = buildNaturalSearchPlan(query);
   try {
     const response = await api.naturalSearch({ query });
@@ -1502,12 +1760,13 @@ function applyNaturalSearchPlan(plan, source, errorMessage = '') {
 
   if (safePlan.from_time) el.timeFrom.value = safePlan.from_time;
   if (safePlan.to_time) el.timeTo.value = safePlan.to_time;
+  syncFilterRangeFromHiddenInputs();
 
   applyFilters();
   let relaxedBy = '';
   if (state.filtered.length === 0 && state.levelFilter && state.levelFilter.size) {
     state.levelFilter = null;
-    relaxedBy = 'Bỏ level filter vì không có dòng match, giữ keyword/concept filter.';
+    relaxedBy = 'Removed the level filter because no rows matched; keyword/concept filters remain active.';
     applyFilters();
   }
   const report = {
@@ -1524,9 +1783,9 @@ function applyNaturalSearchPlan(plan, source, errorMessage = '') {
     error: errorMessage || ''
   };
   renderAiObject('Natural Search', report);
-  const prefix = source === 'ai' ? 'Đã áp dụng AI Search' : 'Đã áp dụng tìm kiếm local thông minh';
-  const suffix = errorMessage ? ` Lý do fallback: ${errorMessage}` : '';
-  setAiStatus(`${prefix}: tìm thấy ${formatNumber(state.filtered.length)} dòng.${suffix}`, state.filtered.length === 0);
+  const prefix = source === 'ai' ? 'Applied AI Search' : 'Applied smart local search';
+  const suffix = errorMessage ? ` Fallback reason: ${errorMessage}` : '';
+  setAiStatus(`${prefix}: found ${formatNumber(state.filtered.length)} row(s).${suffix}`, state.filtered.length === 0);
 }
 
 function buildNaturalSearchPlan(query) {
@@ -1554,8 +1813,8 @@ function buildNaturalSearchPlan(query) {
 
   return {
     explanation: concepts.length
-      ? `Đã nhận diện ${concepts.map((concept) => concept.label).join(', ')} từ câu hỏi tự nhiên.`
-      : 'Đã tách keyword từ câu hỏi tự nhiên để tìm trong log.',
+      ? `Detected ${concepts.map((concept) => concept.label).join(', ')} from the natural-language query.`
+      : 'Extracted keywords from the natural-language query for log search.',
     search_text: displayQuery,
     regex: false,
     case_sensitive: false,
@@ -1773,7 +2032,7 @@ function normalizeSearchText(value) {
     .toLowerCase()
     .normalize('NFKD')
     .replace(/[\u0300-\u036f]/g, '')
-    .replace(/đ/g, 'd')
+    .replace(/\u0111/g, 'd')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -1791,17 +2050,17 @@ const NATURAL_CONCEPTS = [
     terms: ['camera', 'cam', 'frame', 'fps', 'drop', 'dropped', 'lost', 'miss', 'timeout', 'sensor', 'isp', 'lvds']
   },
   {
-    label: 'nhiệt độ/quá nhiệt',
+    label: 'temperature/thermal',
     triggers: ['nhiet do', 'qua nhiet', 'nong', 'temperature', 'temp', 'thermal', 'overheat'],
     terms: ['temperature', 'temp', 'thermal', 'overheat', 'hot', 'nhiet', 'nong']
   },
   {
-    label: 'điện áp/nguồn',
+    label: 'voltage/power',
     triggers: ['dien ap', 'nguon', 'voltage', 'volt', '12v', 'undervoltage', 'overvoltage', 'power'],
     terms: ['voltage', 'volt', 'power', 'undervoltage', 'overvoltage', 'battery', '12v', 'acc', 'ign']
   },
   {
-    label: 'timeout/treo/chậm phản hồi',
+    label: 'timeout/hang/slow response',
     triggers: ['timeout', 'time out', 'treo', 'khong phan hoi', 'delay', 'latency', 'hang'],
     terms: ['timeout', 'time out', 'delay', 'latency', 'expired', 'hang', 'blocked', 'stuck', 'no response']
   },
@@ -1836,7 +2095,7 @@ async function generateSequence() {
   const range = resolveRange() || selectedRange();
   if (!range) return;
   const context = buildLocalContext(range.fromMs, range.toMs, Number(el.aiWindow.value || 500), 500);
-  setAiStatus('AI đang tạo sequence diagram...', false);
+  setAiStatus('AI is generating a sequence diagram...', false);
   const response = await api.sequenceDiagram({
     query: 'Generate Mermaid sequence diagram for selected DLT messages.',
     messages: context,
@@ -1844,32 +2103,32 @@ async function generateSequence() {
     toMs: range.toMs
   });
   if (!response.ok) {
-    setAiStatus(response.error || 'Tạo sequence diagram thất bại.', true);
+    setAiStatus(response.error || 'Sequence diagram generation failed.', true);
     return;
   }
   applyAiHighlights(response.result.suspicious_message_ids || []);
   renderAiObject('Sequence Diagram', response.result);
-  setAiStatus('Đã tạo sequence diagram.', false);
+  setAiStatus('Sequence diagram generated.', false);
 }
 
 async function generateScript() {
   const range = resolveRange() || selectedRange();
   if (!range) return;
   const context = buildLocalContext(range.fromMs, range.toMs, Number(el.aiWindow.value || 500), 700);
-  setAiStatus('AI đang tạo script tái hiện lỗi...', false);
+  setAiStatus('AI is generating a reproduction script...', false);
   const response = await api.reproductionScript({
-    query: 'Tạo script tái hiện lỗi trong lab bench cho lỗi đã chọn. Trả lời bằng tiếng Việt.',
+    query: 'Create a lab-bench reproduction script for the selected issue. Answer in the same language as the user question.',
     messages: context,
     fromMs: range.fromMs,
     toMs: range.toMs
   });
   if (!response.ok) {
-    setAiStatus(response.error || 'Tạo script tái hiện lỗi thất bại.', true);
+    setAiStatus(response.error || 'Reproduction script generation failed.', true);
     return;
   }
   applyAiHighlights(response.result.suspicious_message_ids || []);
   renderAiObject('Reproduction Script', response.result);
-  setAiStatus('Đã tạo script tái hiện lỗi.', false);
+  setAiStatus('Reproduction script generated.', false);
 }
 
 function applyAiResult(result) {
@@ -1887,14 +2146,14 @@ function applyAiHighlights(ids) {
 
 function renderAiReport(result) {
   el.aiReport.innerHTML = `
-    <div class="report-card"><h4>1. Xác thực có phải lỗi không</h4><p>${escapeHtml(result.error_verification || result.summary || '-')}</p></div>
-    <div class="report-card"><h4>2. Nguyên nhân vì sao lỗi</h4><p>${escapeHtml(result.root_cause || '-')}</p></div>
-    <div class="report-card"><h4>3. Hậu quả lỗi</h4><p>${escapeHtml(result.impact || '-')}</p></div>
-    <div class="report-card"><h4>4. Cách tái hiện lỗi</h4><pre>${escapeHtml(JSON.stringify(result.reproduction_steps || [], null, 2))}</pre></div>
-    <div class="report-card"><h4>Hành động khuyến nghị</h4><p>${escapeHtml(result.recommended_action || '-')}</p></div>
-    <div class="report-card"><h4>Message nghi ngờ</h4><p>${escapeHtml((result.suspicious_message_ids || []).join(', ') || '-')}</p></div>
-    <div class="report-card"><h4>Bằng chứng</h4><pre>${escapeHtml(JSON.stringify(result.evidence || [], null, 2))}</pre></div>
-    <div class="report-card"><h4>DTC / Bước tiếp theo</h4><pre>${escapeHtml(JSON.stringify({ dtc_codes: result.dtc_codes || [], next_steps: result.next_steps || [] }, null, 2))}</pre></div>
+    <div class="report-card"><h4>1. Issue Verification</h4><p>${escapeHtml(result.error_verification || result.summary || '-')}</p></div>
+    <div class="report-card"><h4>2. Root Cause</h4><p>${escapeHtml(result.root_cause || '-')}</p></div>
+    <div class="report-card"><h4>3. Impact</h4><p>${escapeHtml(result.impact || '-')}</p></div>
+    <div class="report-card"><h4>4. Reproduction</h4><pre>${escapeHtml(JSON.stringify(result.reproduction_steps || [], null, 2))}</pre></div>
+    <div class="report-card"><h4>Recommended Action</h4><p>${escapeHtml(result.recommended_action || '-')}</p></div>
+    <div class="report-card"><h4>Suspicious Messages</h4><p>${escapeHtml((result.suspicious_message_ids || []).join(', ') || '-')}</p></div>
+    <div class="report-card"><h4>Evidence</h4><pre>${escapeHtml(JSON.stringify(result.evidence || [], null, 2))}</pre></div>
+    <div class="report-card"><h4>DTC / Next Steps</h4><pre>${escapeHtml(JSON.stringify({ dtc_codes: result.dtc_codes || [], next_steps: result.next_steps || [] }, null, 2))}</pre></div>
   `;
 }
 
@@ -2021,11 +2280,6 @@ function copySelectedPayload() {
   if (message) api.writeClipboard(message.payload || '');
 }
 
-function copySelectedDetail() {
-  const message = getSelectedMessage();
-  if (message) api.writeClipboard(JSON.stringify(message, null, 2));
-}
-
 function copyRange() {
   const range = resolveRange();
   if (!range) {
@@ -2071,55 +2325,6 @@ function toggleBookmark(id) {
   if (state.bookmarks.has(numericId)) state.bookmarks.delete(numericId);
   else state.bookmarks.add(numericId);
   renderAll();
-}
-
-function plotSelectedSignal() {
-  const selected = getSelectedMessage();
-  if (!selected) return;
-  const key = `${selected.ecu}|${selected.apid}|${selected.ctid}`;
-  const points = [];
-  for (const message of state.messages) {
-    if (`${message.ecu}|${message.apid}|${message.ctid}` !== key) continue;
-    const numbers = String(message.payload || '').match(/[-+]?\d+(?:\.\d+)?/g);
-    if (numbers?.length) {
-      points.push({ x: message.timeMs, y: Number(numbers[0]), id: message.id });
-    }
-  }
-  drawSignal(points);
-}
-
-function drawSignal(points) {
-  const canvas = el.signalChart;
-  const ctx = setupCanvas(canvas);
-  const width = canvas.clientWidth;
-  const height = canvas.clientHeight;
-  ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = 'rgba(255,255,255,0.035)';
-  ctx.fillRect(0, 0, width, height);
-  if (points.length < 2) {
-    ctx.fillStyle = '#95aa9f';
-    ctx.fillText('No numeric signal found in selected APID/CTID.', 10, 24);
-    return;
-  }
-
-  const minX = Math.min(...points.map((point) => point.x));
-  const maxX = Math.max(...points.map((point) => point.x));
-  const minY = Math.min(...points.map((point) => point.y));
-  const maxY = Math.max(...points.map((point) => point.y));
-  const sx = (value) => 10 + ((value - minX) / Math.max(1, maxX - minX)) * (width - 20);
-  const sy = (value) => height - 10 - ((value - minY) / Math.max(1, maxY - minY)) * (height - 24);
-
-  ctx.strokeStyle = '#39d98a';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  points.forEach((point, index) => {
-    if (index === 0) ctx.moveTo(sx(point.x), sy(point.y));
-    else ctx.lineTo(sx(point.x), sy(point.y));
-  });
-  ctx.stroke();
-  ctx.fillStyle = '#95aa9f';
-  ctx.font = '11px Cascadia Code, Consolas, monospace';
-  ctx.fillText(`points=${points.length} min=${minY} max=${maxY}`, 10, 14);
 }
 
 function handleTimelineClick(event) {
@@ -2245,7 +2450,7 @@ function resetWorkspace() {
   el.parseStatus.textContent = 'Idle';
   el.parseProgress.style.width = '0%';
   el.aiReport.innerHTML = '';
-    setAiStatus('Chưa có phân tích AI.', false);
+  setAiStatus('No AI analysis yet.', false);
 }
 
 function clearData() {
@@ -2261,6 +2466,13 @@ function clearData() {
   state.parseDone = false;
   state.aiChatMode = 'selection';
   state.aiRange = {
+    min: null,
+    max: null,
+    from: null,
+    to: null,
+    dirty: false
+  };
+  state.filterRange = {
     min: null,
     max: null,
     from: null,
@@ -2349,6 +2561,12 @@ function formatHourTick(ms) {
   return date.toISOString().slice(11, 16);
 }
 
+function formatMinuteTick(ms) {
+  if (!Number.isFinite(ms)) return '-';
+  const date = new Date(ms);
+  return date.toISOString().slice(11, 16);
+}
+
 function formatHourMinuteSecond(ms) {
   if (!Number.isFinite(ms)) return '-';
   return new Date(ms).toISOString().slice(11, 19);
@@ -2358,12 +2576,24 @@ function clampNumber(value, min, max) {
   return Math.min(max, Math.max(min, Number(value)));
 }
 
-function shortPath(filePath) {
-  return String(filePath || '').split(/[\\/]/).slice(-2).join('\\');
+function loadTextSetting(key) {
+  try {
+    return localStorage.getItem(key) || '';
+  } catch (_error) {
+    return '';
+  }
 }
 
-function normalizePayload(payload) {
-  return String(payload || '').replace(/\d+/g, '#').replace(/\s+/g, ' ').slice(0, 160);
+function saveTextSetting(key, value) {
+  try {
+    localStorage.setItem(key, String(value || ''));
+  } catch (_error) {
+    // Ignore local storage failures.
+  }
+}
+
+function shortPath(filePath) {
+  return String(filePath || '').split(/[\\/]/).slice(-2).join('\\');
 }
 
 function normalizeLevelName(level) {

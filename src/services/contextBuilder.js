@@ -29,20 +29,20 @@ function buildAnalysisPayload(request, ragDocs, config) {
 function buildNaturalSearchPayload(request, ragDocs) {
   return {
     systemPrompt: [
-      'Bạn chuyển yêu cầu tìm kiếm log ECU bằng ngôn ngữ tự nhiên thành filter xác định.',
-      'Luôn trả JSON hợp lệ. Các chuỗi giải thích phải viết bằng tiếng Việt.',
-      'Các field DLT có sẵn: payload, level, type, ecu, apid, ctid, fileName, time, timeMs, messageId.',
-      'Không được trả filter rỗng. Nếu không chắc, hãy tạo keywords rộng từ câu hỏi và synonym kỹ thuật.',
-      'Ví dụ: "rớt frame" -> keywords gồm frame, fps, drop, dropped, lost, camera. "nhiệt độ > 80" -> temperature, temp, thermal, overheat, 80.',
-      'Chỉ set levels nếu người dùng nói rõ Fatal/Error/Warn/Info/Debug; đừng set level chỉ vì người dùng nói "lỗi".'
+      'Convert a natural-language ECU log search request into a deterministic local filter.',
+      'Always return valid JSON. Explanation strings should use the same language as the user query.',
+      'Available DLT fields: payload, level, type, ecu, apid, ctid, fileName, time, timeMs, messageId.',
+      'Do not return an empty filter. If uncertain, create broad keywords from the question and technical synonyms.',
+      'Example: "dropped frame" -> keywords include frame, fps, drop, dropped, lost, camera. "temperature > 80" -> temperature, temp, thermal, overheat, 80.',
+      'Only set levels if the user explicitly says Fatal/Error/Warn/Info/Debug; do not set a level only because the user says "issue" or "bug".'
     ].join('\n'),
     userPrompt: [
-      `Yêu cầu tìm kiếm của người dùng: ${request.query || ''}`,
+      `User search request: ${request.query || ''}`,
       '',
-      'Đoạn tài liệu ECU liên quan:',
+      'Relevant ECU documentation snippets:',
       formatDocs(trimDocs(ragDocs, 4000)),
       '',
-      'Hãy tạo filter để UI có thể áp dụng local.'
+      'Create a filter the UI can apply locally.'
     ].join('\n')
   };
 }
@@ -57,19 +57,19 @@ function buildSequencePayload(request, ragDocs, config) {
 
   return {
     systemPrompt: [
-      'Bạn là chuyên gia phân tích giao tiếp ECU ô tô.',
-      'Sinh mã Mermaid sequenceDiagram từ các DLT message được chọn.',
-      'Dùng ECU/APID/CTID hoặc component suy luận được làm participant. Đánh dấu timeout, retry, error và thiếu response nếu thấy trong log.',
-      'Mọi phần mô tả phải viết bằng tiếng Việt.'
+      'You are an automotive ECU communication analysis expert.',
+      'Generate Mermaid sequenceDiagram code from the selected DLT messages.',
+      'Use ECU/APID/CTID or inferred components as participants. Mark timeout, retry, error, and missing response patterns if visible in the log.',
+      'Use the same language as the user query for all descriptions.'
     ].join('\n'),
     userPrompt: [
-      'Đoạn tài liệu ECU:',
+      'ECU documentation snippets:',
       formatDocs(trimDocs(ragDocs, 4000)),
       '',
-      'Ngữ cảnh log được chọn:',
+      'Selected log context:',
       formatMessages(selection.context),
       '',
-      'Trả về sequence diagram ngắn gọn và tóm tắt tiếng Việt.'
+      'Return a concise sequence diagram and summary.'
     ].join('\n')
   };
 }
@@ -84,19 +84,19 @@ function buildScriptPayload(request, ragDocs, config) {
 
   return {
     systemPrompt: [
-      'Bạn tạo script tái hiện lỗi an toàn cho bàn test/lab bench.',
-      'Ưu tiên Python pseudocode nếu không đủ chi tiết CAPL. Không điều khiển xe thật.',
-      'Dùng các message nghi ngờ và timing làm chuỗi tái hiện.',
-      'Mọi ghi chú, giải thích phải viết bằng tiếng Việt.'
+      'Create a safe reproduction script for a test bench or lab bench.',
+      'Prefer Python pseudocode if there is not enough detail for CAPL. Do not control a real vehicle.',
+      'Use suspicious messages and timing as the reproduction sequence.',
+      'Use the same language as the user query for notes and explanations.'
     ].join('\n'),
     userPrompt: [
-      'Đoạn tài liệu ECU:',
+      'ECU documentation snippets:',
       formatDocs(trimDocs(ragDocs, 4000)),
       '',
-      'Ngữ cảnh lỗi:',
+      'Issue context:',
       formatMessages(selection.context),
       '',
-      'Trả về script có thể replay hoặc mô phỏng chuỗi message trên bàn test.'
+      'Return a script that can replay or simulate the message sequence on a test bench.'
     ].join('\n')
   };
 }
@@ -109,23 +109,24 @@ function buildChatPayload(request, ragDocs, config) {
 
   return {
     systemPrompt: [
-      'Bạn là AI phân tích lỗi Built-in Cam ECU, ưu tiên tìm nguyên nhân lỗi từ DLT log.',
-      'Luôn trả lời bằng tiếng Việt, rõ ràng, thực dụng, có bằng chứng từ thời điểm và payload nếu có.',
-      'Context log gửi cho bạn chỉ gồm thời gian HH:mm:ss và payload. Không dựa vào ngày, delta, ECU/APID/CTID/type/level/id vì các field đó không được gửi vào prompt.',
-      'Nếu thiếu dữ liệu, nói rõ cần thêm khoảng thời gian/message/mapping FIBEX/ARXML nào.',
-      'Với DLT non-verbose, không suy diễn raw hex thành text nếu không có mapping.',
-      'Nếu câu hỏi là nghi vấn lỗi/bug, bắt buộc trả lời đúng 4 mục: 1. Xác thực có phải lỗi không. 2. Nguyên nhân vì sao lỗi. 3. Hậu quả lỗi. 4. Cách tái hiện lỗi.',
+      'You are an AI diagnostic engineer for Built-in Cam ECU logs. Prioritize root-cause analysis from DLT timeline and payload evidence.',
+      'Answer in the same language as the user question. If the user writes Vietnamese, answer Vietnamese. If the user writes English, answer English.',
+      'Be clear, practical, and cite evidence using HH:mm:ss time and payload when available.',
+      'The log context sent to you contains only HH:mm:ss time and payload. Do not rely on date, delta, ECU/APID/CTID/type/level/id because those fields are not sent in this prompt.',
+      'If data is missing, say exactly which time window, message type, or FIBEX/ARXML mapping is needed.',
+      'For non-verbose DLT, do not decode raw hex into text without mapping.',
+      'If the question is about a suspected issue/bug, answer in exactly 4 sections. Section titles must be in the answer language. For Vietnamese answers, use natural Vietnamese titles with diacritics for issue verification, root cause, impact, and reproduction steps. For English answers, use "1. Issue Verification", "2. Root Cause", "3. Impact", "4. Reproduction Steps".',
       '',
-      'Tài liệu ECU liên quan từ RAG:',
+      'Relevant ECU documentation from RAG:',
       formatDocs(docs)
     ].join('\n'),
     userPrompt: [
-      `Câu hỏi của người dùng: ${request.question || ''}`,
+      `User question: ${request.question || ''}`,
       '',
-      'Context log gửi kèm (chỉ HH:mm:ss và payload):',
+      'Attached log context (HH:mm:ss and payload only):',
       formatMessages(context),
       '',
-      'Hãy trả lời như một kỹ sư chẩn đoán. Với nghi vấn lỗi/bug, dùng đúng 4 mục: xác thực lỗi, nguyên nhân, hậu quả, cách tái hiện.'
+      'Respond as a diagnostic engineer. For a suspected issue/bug, use the 4 required sections and translate section titles into the answer language.'
     ].join('\n'),
     promptStats: {
       contextMessages: context.length,
@@ -203,35 +204,35 @@ function reduceContext(messages, maxLines) {
 
 function diagnosticSystemPrompt(docs) {
   return [
-    'Bạn là kỹ sư chẩn đoán cấp senior cho Built-in Cam ECU.',
-    'Bắt buộc trả lời bằng tiếng Việt trong mọi field dạng text.',
-    'Mục tiêu: tìm nguyên nhân gốc từ DLT log, không chỉ tóm tắt. Ưu tiên Error/Fatal, khoảng reset/ignition-cycle, bằng chứng DTC/UDS, triệu chứng camera FPS/voltage/temperature/storage/network và thứ tự timing.',
-    'Dùng các đoạn tài liệu ECU được cung cấp làm căn cứ. Nếu chưa đủ bằng chứng, nói rõ đang thiếu log/message/mapping nào.',
-    'Với DLT non-verbose, không diễn giải raw hex thành text. Chỉ dùng timeline/time, payload đã decode và mapping/tài liệu nếu có.',
-    'Trả JSON structured đúng schema. suspicious_message_ids phải là id số của các dòng log được cung cấp.',
-    'Không được để các mục xác thực lỗi, nguyên nhân, hậu quả, cách tái hiện rỗng. Nếu chưa chắc chắn, vẫn phải nêu giả thuyết hợp lý nhất và mức độ tin cậy.',
+    'You are a senior diagnostic engineer for Built-in Cam ECU.',
+    'Use the same language as the user question for all text fields.',
+    'Goal: find root cause from DLT logs, not just summarize. Prioritize Error/Fatal, reset/ignition-cycle windows, DTC/UDS evidence, camera FPS/voltage/temperature/storage/network symptoms, and timing order.',
+    'Use the provided ECU documentation snippets as evidence. If evidence is insufficient, state which log/message/mapping is missing.',
+    'For non-verbose DLT, do not interpret raw hex as text. Use only timeline/time, decoded payload, and mapping/documentation if available.',
+    'Return structured JSON matching the schema. suspicious_message_ids must be numeric ids from the provided log rows.',
+    'Do not leave issue verification, root cause, impact, or reproduction empty. If uncertain, provide the best technical hypothesis and confidence level.',
     '',
-    'Đoạn tài liệu ECU:',
+    'ECU documentation snippets:',
     formatDocs(docs)
   ].join('\n');
 }
 
 function diagnosticUserPrompt(request, selection, query) {
   return [
-    `Chế độ phân tích: ${request.mode || 'manual'}`,
-    `Mục tiêu/câu hỏi của người dùng: ${request.query || 'Tìm lỗi ECU có khả năng cao nhất và nguyên nhân gốc.'}`,
-    `Từ khóa ngữ cảnh: ${query}`,
+    `Analysis mode: ${request.mode || 'manual'}`,
+    `User goal/question: ${request.query || 'Find the most likely ECU issue and root cause.'}`,
+    `Context keywords: ${query}`,
     '',
-    'Các DLT message trong ngữ cảnh (chỉ HH:mm:ss và payload):',
+    'DLT messages in context (HH:mm:ss and payload only):',
     formatMessages(selection.context),
     '',
-    'Yêu cầu output:',
-    '- error_verification: xác thực đây có phải lỗi hay không, mức chắc chắn, bằng chứng theo thời điểm/payload',
-    '- root_cause: nguyên nhân vì sao lỗi, kèm lập luận dựa trên log và tài liệu',
-    '- impact: hậu quả/tác động của lỗi',
-    '- reproduction_steps: cách tái hiện lỗi hoặc điều kiện cần để tái hiện',
-    '- suspicious_message_ids: để mảng rỗng nếu context không có id message',
-    '- recommended_action: hành động kỹ thuật tiếp theo, viết tiếng Việt'
+    'Output requirements:',
+    '- error_verification: verify whether this is an issue, certainty level, evidence by time/payload',
+    '- root_cause: root cause and reasoning based on log and documentation',
+    '- impact: issue consequence or impact',
+    '- reproduction_steps: reproduction steps or required reproduction conditions',
+    '- suspicious_message_ids: return an empty array if the context has no message ids',
+    '- recommended_action: next technical action'
   ].join('\n');
 }
 

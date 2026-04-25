@@ -146,10 +146,10 @@ class AiClient {
             content: [
               payload.systemPrompt,
               '',
-              'QUAN TRỌNG: Lần trả lời trước chưa đủ dữ liệu. Bây giờ bắt buộc trả JSON object KHÔNG RỖNG.',
-              'Mọi chuỗi text phải viết bằng tiếng Việt.',
-              'Bắt buộc có các key: summary, error_verification, root_cause, impact, reproduction_steps, suspicious_message_ids, recommended_action, severity, confidence, evidence, dtc_codes, timeline_marks, next_steps.',
-              'Nếu chưa chắc chắn, hãy nêu giả thuyết kỹ thuật tốt nhất dựa trên log, không được trả câu chung chung.'
+              'IMPORTANT: The previous response did not contain enough data. Now return a NON-EMPTY JSON object.',
+              'Use the same language as the user question for every text string.',
+              'Required keys: summary, error_verification, root_cause, impact, reproduction_steps, suspicious_message_ids, recommended_action, severity, confidence, evidence, dtc_codes, timeline_marks, next_steps.',
+              'If uncertain, provide the best technical hypothesis based on the log; do not return generic filler.'
             ].join('\n')
           },
           { role: 'user', content: payload.userPrompt }
@@ -367,10 +367,10 @@ function normalizeDiagnosticResult(result) {
   );
 
   return {
-    summary: stringOrFallback(result?.summary, result?.error_verification || diagnosis.primary_issue || result?.primary_issue || 'AI chưa cung cấp tóm tắt đủ rõ.'),
+    summary: stringOrFallback(result?.summary, result?.error_verification || diagnosis.primary_issue || result?.primary_issue || 'AI did not provide a clear enough summary.'),
     error_verification: stringOrFallback(
       result?.error_verification || result?.verification || result?.is_error,
-      result?.summary || diagnosis.primary_issue || 'Chưa đủ bằng chứng để xác thực chắc chắn; cần xem thêm timeline và payload quanh vùng nghi ngờ.'
+      result?.summary || diagnosis.primary_issue || 'There is not enough evidence for firm verification; inspect the timeline and payload around the suspicious window.'
     ),
     root_cause: stringOrFallback(
       result?.root_cause,
@@ -378,23 +378,23 @@ function normalizeDiagnosticResult(result) {
         diagnosis.primary_issue,
         Array.isArray(diagnosis.probable_causes) ? diagnosis.probable_causes.join('; ') : '',
         result?.rootCause
-      ].filter(Boolean).join(' - ') || 'AI chưa nêu rõ nguyên nhân gốc; cần xem thêm các message quanh thời điểm lỗi.'
+      ].filter(Boolean).join(' - ') || 'AI did not state a clear root cause; inspect messages around the issue time.'
     ),
     impact: stringOrFallback(
       result?.impact || result?.consequence || result?.effect,
-      'Chưa đủ dữ liệu để lượng hóa hậu quả; rủi ro cần đánh giá dựa trên triệu chứng xuất hiện sau message nghi ngờ.'
+      'There is not enough data to quantify impact; evaluate risk from symptoms after the suspicious message.'
     ),
     reproduction_steps: normalizeStringArrayOrFallback(
       result?.reproduction_steps ||
       result?.steps_to_reproduce ||
       result?.reproduce_steps ||
       result?.reproduction,
-      ['Chưa đủ điều kiện tái hiện cụ thể; cần replay hoặc thu thêm log quanh các message nghi ngờ và đối chiếu điều kiện kích hoạt trong tài liệu ECU.']
+      ['There are not enough concrete reproduction conditions; replay or collect more logs around suspicious messages and compare trigger conditions in ECU documentation.']
     ),
     suspicious_message_ids: suspiciousIds,
     recommended_action: stringOrFallback(
       result?.recommended_action,
-      recommended.join('\n') || result?.action || 'Kiểm tra các message đã highlight và thu thập thêm ngữ cảnh quanh cửa sổ lỗi.'
+      recommended.join('\n') || result?.action || 'Inspect highlighted messages and collect more context around the issue window.'
     ),
     severity: normalizeSeverity(result?.severity || result?.overall_severity),
     confidence: normalizeConfidence(result?.confidence),
@@ -449,7 +449,7 @@ function normalizeEvidence(evidence, logAnalysis, timelineMarks) {
         : [];
   return source.map((item) => ({
     message_id: Number(item.message_id ?? item.id ?? item.line ?? 0),
-    reason: String(item.reason || item.message || item.classification || item.impact || item.label || 'AI đánh dấu message này là nghi ngờ.')
+    reason: String(item.reason || item.message || item.classification || item.impact || item.label || 'AI marked this message as suspicious.')
   })).filter((item) => Number.isFinite(item.message_id) && item.reason);
 }
 
@@ -508,9 +508,9 @@ function isSparseDiagnosticResult(result) {
   const rootCause = String(result?.root_cause || '').toLowerCase();
   const action = String(result?.recommended_action || '').toLowerCase();
   return (
-    summary.includes('ai chưa cung cấp') ||
-    rootCause.includes('ai chưa nêu rõ') ||
-    action.includes('thu thập thêm ngữ cảnh') ||
+    summary.includes('ai did not provide') ||
+    rootCause.includes('ai did not state') ||
+    action.includes('collect more context') ||
     (!result?.evidence?.length && !result?.suspicious_message_ids?.length && !result?.next_steps?.length)
   );
 }

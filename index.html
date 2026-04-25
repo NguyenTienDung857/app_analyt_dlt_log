@@ -19,6 +19,7 @@
       <div class="top-actions">
         <button id="btn-open" class="btn primary">Open DLT</button>
         <button id="btn-docs" class="btn">Add ECU Docs</button>
+        <button id="btn-guide" class="btn">Download Guide</button>
         <button id="btn-ai-focus" class="btn">Log AI Focus</button>
         <button id="btn-theme" class="btn">Light</button>
         <button id="btn-clear" class="btn danger">Reset x</button>
@@ -39,11 +40,10 @@
       <aside class="left-rail panel">
         <section>
           <div class="section-title">Message Detail</div>
-          <div id="detail-empty" class="empty-state">Select a row to inspect full payload, raw hex/ascii, and metadata.</div>
+          <div id="detail-empty" class="empty-state">Select a row to inspect file, timestamp, counter, and payload.</div>
           <div id="detail-panel" class="detail-panel hidden"></div>
-          <div class="button-grid">
+          <div class="button-grid detail-actions compact-action-row">
             <button id="btn-copy-payload" class="btn">Copy Payload</button>
-            <button id="btn-copy-detail" class="btn">Copy JSON</button>
             <button id="btn-bookmark" class="btn">Bookmark</button>
             <button id="btn-analyze-selected" class="btn primary">Use Current Row</button>
           </div>
@@ -53,18 +53,20 @@
           <div class="section-title">Search / Filter</div>
           <div class="search-group">
             <input id="search-input" class="input search" placeholder="Search payload, ECU/APID/CTID, level, type, file... (F)">
-            <select id="search-field" class="select">
-              <option value="all">All fields</option>
-              <option value="payload">Payload</option>
-              <option value="ecu">ECU</option>
-              <option value="apid">APID</option>
-              <option value="ctid">CTID</option>
-              <option value="level">Level</option>
-              <option value="type">Type</option>
-              <option value="fileName">File</option>
-            </select>
-            <label><input id="case-sensitive" type="checkbox"> Case</label>
-            <label><input id="regex-search" type="checkbox"> Regex</label>
+            <div class="search-options-row">
+              <select id="search-field" class="select compact-select">
+                <option value="all">All fields</option>
+                <option value="payload">Payload</option>
+                <option value="ecu">ECU</option>
+                <option value="apid">APID</option>
+                <option value="ctid">CTID</option>
+                <option value="level">Level</option>
+                <option value="type">Type</option>
+                <option value="fileName">File</option>
+              </select>
+              <label><input id="case-sensitive" type="checkbox"> Case</label>
+              <label><input id="regex-search" type="checkbox"> Regex</label>
+            </div>
           </div>
 
           <div class="filter-row">
@@ -83,8 +85,25 @@
           </div>
 
           <div class="filter-row compact">
-            <label>From <input id="time-from" class="input time-input" placeholder="time or ms"></label>
-            <label>To <input id="time-to" class="input time-input" placeholder="time or ms"></label>
+            <input id="time-from" type="hidden">
+            <input id="time-to" type="hidden">
+            <div id="filter-time-range-panel" class="left-time-range-panel">
+              <div class="range-head compact-range-head">
+                <span>Time Range</span>
+                <span id="filter-range-limits">No logs loaded</span>
+              </div>
+              <div class="dual-range compact-dual-range">
+                <div class="dual-range-track"></div>
+                <div id="filter-range-selection" class="dual-range-selection"></div>
+                <input id="filter-range-start" class="range-input range-input-start" type="range" min="0" max="0" step="1" value="0" disabled>
+                <input id="filter-range-end" class="range-input range-input-end" type="range" min="0" max="0" step="1" value="0" disabled>
+              </div>
+              <div class="range-footer compact-range-footer">
+                <span id="filter-range-from-label">-</span>
+                <button id="btn-filter-range-clear" class="btn small" type="button">Full Log</button>
+                <span id="filter-range-to-label">-</span>
+              </div>
+            </div>
             <label><input id="marked-only" type="checkbox"> Marked</label>
             <button id="btn-reset-filter" class="btn">Reset Filter</button>
             <button id="btn-export-csv" class="btn">Export CSV</button>
@@ -111,11 +130,6 @@
         </section>
 
         <section>
-          <div class="section-title">Level Distribution</div>
-          <div id="distribution" class="distribution"></div>
-        </section>
-
-        <section>
           <div class="section-title">Range Tools</div>
           <label class="field-label">Range A</label>
           <input id="range-a" class="input" placeholder="time, ms, or selected id">
@@ -126,29 +140,32 @@
             <button id="btn-analyze-range" class="btn primary">Use A-B</button>
           </div>
         </section>
-        <section>
-          <div class="section-title">Signal Plot / Diff</div>
-          <canvas id="signal-chart" class="signal-chart" height="150"></canvas>
-          <button id="btn-plot-signal" class="btn full">Plot First Numeric Signal</button>
-          <div id="diff-panel" class="diff-panel">Open two files to view signature diff.</div>
-        </section>
 
-        <section class="ai-config-panel">
-          <div class="section-title">AI / RAG Config</div>
-          <div id="docs-status" class="docs-status">Docs: loading</div>
-          <label class="field-label">Base URL</label>
-          <input id="ai-base-url" class="input" spellcheck="false">
-          <label class="field-label">Model</label>
-          <input id="ai-model" class="input" spellcheck="false">
-          <label class="field-label">API Key</label>
-          <input id="ai-key" class="input" type="password" placeholder="Leave blank to keep saved key">
-          <label class="field-label">Extra headers JSON</label>
-          <textarea id="ai-headers" class="textarea small" spellcheck="false">{}</textarea>
-          <div class="inline-fields">
-            <label><input id="ai-auto-scan" type="checkbox"> Gợi ý context sau khi mở log</label>
-            <label>Window <input id="ai-window" class="mini-input" type="number" min="0" step="100"> ms</label>
+        <section id="ai-config-panel" class="ai-config-panel locked">
+          <button id="btn-ai-config-unlock" class="config-lock-btn" type="button">
+            <span>AI / RAG Config</span>
+            <span id="ai-config-lock-state">Locked</span>
+          </button>
+          <div id="ai-config-password-row" class="config-password-row hidden">
+            <input id="ai-config-password" class="input" type="password" placeholder="Enter password">
+            <button id="btn-ai-config-password-submit" class="btn small" type="button">Unlock</button>
           </div>
-          <button id="btn-save-ai" class="btn full">Save AI Config</button>
+          <div id="ai-config-body" class="ai-config-body hidden">
+            <div id="docs-status" class="docs-status">Docs: loading</div>
+            <label class="field-label">Base URL</label>
+            <input id="ai-base-url" class="input" spellcheck="false">
+            <label class="field-label">Model</label>
+            <input id="ai-model" class="input" spellcheck="false">
+            <label class="field-label">API Key</label>
+            <input id="ai-key" class="input" type="password" placeholder="Leave blank to keep saved key">
+            <label class="field-label">Extra headers JSON</label>
+            <textarea id="ai-headers" class="textarea small" spellcheck="false">{}</textarea>
+            <div class="inline-fields">
+              <label><input id="ai-auto-scan" type="checkbox"> Suggest context after opening logs</label>
+              <label>Window <input id="ai-window" class="mini-input" type="number" min="0" step="100"> ms</label>
+            </div>
+            <button id="btn-save-ai" class="btn full">Save AI Config</button>
+          </div>
         </section>
       </aside>
 
@@ -156,18 +173,27 @@
         <div class="timeline-panel panel">
           <div class="timeline-heading">
             <div>
-              <div class="section-title">Hourly Timeline</div>
-              <strong>Log time flow</strong>
+              <div class="section-title">Minute Timeline</div>
             </div>
-            <span id="timeline-label" class="timeline-label">Timeline not loaded</span>
+            <span id="timeline-label" class="timeline-label hidden"></span>
           </div>
           <canvas id="timeline" height="118"></canvas>
         </div>
 
-        <div class="log-panel panel">
-          <div class="log-header log-grid">
-            <div>Mark</div>
-            <div>#</div>
+          <div class="log-panel panel">
+            <div id="focus-search-strip" class="focus-search-strip">
+              <button id="btn-focus-search" class="btn small">Search</button>
+              <input id="focus-search-input" class="input focus-search-input hidden" placeholder="Quick search in logs...">
+              <button id="btn-focus-search-close" class="btn small hidden">x</button>
+            </div>
+            <div class="log-scroll-actions">
+              <button id="btn-log-scroll-up" class="btn small" type="button">Up</button>
+              <button id="btn-log-scroll-down" class="btn small" type="button">Down</button>
+              <button id="btn-log-scroll-end" class="btn small" type="button">End</button>
+            </div>
+            <div class="log-header log-grid">
+              <div>Mark</div>
+              <div>#</div>
             <div><label class="time-toggle"><input id="show-full-time" type="checkbox"> Time</label></div>
             <div>Delta</div>
             <div>Payload</div>
@@ -191,7 +217,7 @@
             <input id="ai-chat-to" type="hidden">
             <div class="range-head">
               <span>AI time range</span>
-              <span id="ai-range-limits">Chưa có log</span>
+              <span id="ai-range-limits">No logs loaded</span>
             </div>
             <div class="dual-range">
               <div class="dual-range-track"></div>
@@ -201,37 +227,53 @@
             </div>
             <div class="range-footer">
               <span id="ai-range-from-label">-</span>
-              <button id="btn-ai-chat-range-selected" class="btn small" title="Lấy từ Range A/B bên trái">Dùng Range A/B</button>
-              <button id="btn-ai-chat-range-clear" class="btn small">Toàn bộ</button>
+              <button id="btn-ai-chat-range-selected" class="btn small" title="Use Range A/B from the left panel">Use A-B</button>
+              <button id="btn-ai-chat-range-clear" class="btn small">Full Log</button>
               <span id="ai-range-to-label">-</span>
             </div>
           </div>
 
           <div class="ai-report-panel unified-ai-panel">
             <div class="ai-report-heading">
-              <div>
+              <div class="ai-report-title-actions">
                 <div class="section-title">AI Diagnostic Report</div>
+                <button id="btn-ai-prompt" class="btn small ai-prompt-heading-btn">Prompt</button>
+                <select id="ai-runtime-model" class="select ai-model-select" title="AI model for this Send">
+                  <option value="">Config Default</option>
+                  <option value="cx/gpt-5.5">Codex GPT-5.5</option>
+                  <option value="cx/gpt-5.4">Codex GPT-5.4</option>
+                  <option value="cx/gpt-5.4-mini">Codex GPT-5.4 Mini</option>
+                  <option value="gpt-5.5">OpenAI GPT-5.5</option>
+                  <option value="gpt-5.4">OpenAI GPT-5.4</option>
+                  <option value="gpt-5.4-mini">OpenAI GPT-5.4 Mini</option>
+                  <option value="gpt-5.4-nano">OpenAI GPT-5.4 Nano</option>
+                  <option value="gpt-5.2" selected>OpenAI GPT-5.2</option>
+                </select>
               </div>
-              <span id="ai-chat-range-info" class="chat-range-info">0 message</span>
             </div>
-            <div id="ai-status" class="ai-status">Chưa có phân tích AI.</div>
+            <div id="ai-status" class="ai-status">No AI analysis yet.</div>
             <div id="ai-report" class="ai-report ai-chat-log">
               <div class="chat-bubble assistant">
                 <strong>AI</strong>
-                <p>Chọn mode, kéo khoảng thời gian nếu cần, rồi bấm Send để phân tích.</p>
+                <p>Select a mode, choose a time range if needed, then press Send.</p>
               </div>
             </div>
+            <div id="ai-prompt-panel" class="ai-prompt-panel hidden">
+              <label class="field-label" for="ai-guidance-input">AI response guidance</label>
+              <textarea id="ai-guidance-input" class="textarea ai-guidance-input" placeholder="Optional. Example: answer in 4 sections, prioritize root cause, cite evidence by time/payload..." spellcheck="false"></textarea>
+            </div>
             <div class="ai-chat-input-row">
-              <textarea id="ai-chat-input" class="textarea ai-chat-input" placeholder="Nhập nghi vấn lỗi hoặc câu hỏi chẩn đoán..." spellcheck="false"></textarea>
+              <textarea id="ai-chat-input" class="textarea ai-chat-input" placeholder="Type a diagnostic question or suspected issue..." spellcheck="false"></textarea>
               <div class="ai-chat-actions">
                 <select id="ai-chat-mode-select" class="select ai-mode-select">
-                  <option value="selection">Dòng hiện tại</option>
-                  <option value="range">Khoảng thời gian</option>
-                  <option value="errors">Bug tiềm ẩn</option>
+                  <option value="selection">Current</option>
+                  <option value="range">Range</option>
+                  <option value="errors">Bug</option>
                 </select>
                 <button id="btn-ai-chat-send" class="btn primary">Send</button>
               </div>
             </div>
+            <div id="ai-chat-range-info" class="chat-range-info chat-range-info-line">0 message</div>
           </div>
         </section>
       </aside>

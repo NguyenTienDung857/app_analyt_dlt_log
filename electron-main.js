@@ -241,7 +241,11 @@ ipcMain.handle('ai:analyze', async (_event, request) => {
 
 ipcMain.handle('ai:chat', async (_event, request) => {
   const config = readConfigInternal();
-  if (!hasUsableAiConfig(config)) {
+  const effectiveConfig = normalizeAiConfig({
+    ...config,
+    model: String(request.model || '').trim() || config.model
+  });
+  if (!hasUsableAiConfig(effectiveConfig)) {
     return { ok: false, error: 'AI config is missing base URL, model, or API key.' };
   }
 
@@ -250,8 +254,8 @@ ipcMain.handle('ai:chat', async (_event, request) => {
     ...(Array.isArray(request.messages) ? request.messages.slice(0, 80).map((message) => message.payload || '') : [])
   ].join(' ');
   const ragDocs = ragStore ? ragStore.search(query, 8) : [];
-  const payload = buildChatPayload(request, ragDocs, config);
-  const result = await new AiClient(config).chat(payload);
+  const payload = buildChatPayload(request, ragDocs, effectiveConfig);
+  const result = await new AiClient(effectiveConfig).chat(payload);
   return { ok: true, result, ragDocs, promptStats: payload.promptStats };
 });
 
