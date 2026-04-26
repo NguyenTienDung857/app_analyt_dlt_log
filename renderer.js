@@ -60,9 +60,13 @@ const state = {
 const el = {
   app: document.getElementById('app'),
   dropZone: document.getElementById('drop-zone'),
+  starsCanvas: document.getElementById('stars-canvas'),
+  brandVersion: document.getElementById('brand-version'),
   workspace: document.getElementById('workspace'),
   btnOpen: document.getElementById('btn-open'),
   btnOpenEmpty: document.getElementById('btn-open-empty'),
+  btnHelp: document.getElementById('btn-help'),
+  helpMenu: document.getElementById('help-menu'),
   btnDocs: document.getElementById('btn-docs'),
   btnGuide: document.getElementById('btn-guide'),
   btnAiFocus: document.getElementById('btn-ai-focus'),
@@ -156,7 +160,30 @@ const el = {
   aiRangeFromLabel: document.getElementById('ai-range-from-label'),
   aiRangeToLabel: document.getElementById('ai-range-to-label'),
   aiRangeLimits: document.getElementById('ai-range-limits'),
-  aiRangeSelection: document.getElementById('ai-range-selection')
+  aiRangeSelection: document.getElementById('ai-range-selection'),
+  btnCheckUpdate: document.getElementById('btn-check-update'),
+  updateBar: document.getElementById('update-bar'),
+  updateBarMsg: document.getElementById('update-bar-msg'),
+  updateBarIcon: document.getElementById('update-bar-icon'),
+  btnUpdateDismiss: document.getElementById('btn-update-dismiss'),
+  updateModalOverlay: document.getElementById('update-modal-overlay'),
+  updateModal: document.getElementById('update-modal'),
+  updateModalVersion: document.getElementById('update-modal-version'),
+  updatePhaseAsk: document.querySelector('.update-phase-ask'),
+  updatePhaseDownloading: document.querySelector('.update-phase-downloading'),
+  updatePhaseDone: document.querySelector('.update-phase-done'),
+  updatePhaseError: document.querySelector('.update-phase-error'),
+  updateDlFill: document.getElementById('update-dl-fill'),
+  updateDlPct: document.getElementById('update-dl-pct'),
+  updateDlSize: document.getElementById('update-dl-size'),
+  updateDlSpeed: document.getElementById('update-dl-speed'),
+  updateDonVersion: document.getElementById('update-done-version'),
+  updateErrorMsg: document.getElementById('update-error-msg'),
+  btnUpdateYes: document.getElementById('btn-update-yes'),
+  btnUpdateNo: document.getElementById('btn-update-no'),
+  btnUpdateInstall: document.getElementById('btn-update-install'),
+  btnUpdateLater: document.getElementById('btn-update-later'),
+  btnUpdateErrorClose: document.getElementById('btn-update-error-close')
 };
 
 init();
@@ -172,6 +199,8 @@ function init() {
   loadAiConfig();
   refreshDocsStatus();
   resetWorkspace();
+  initStarsCanvas();
+  loadAppVersion();
 }
 
 function wireEvents() {
@@ -179,9 +208,50 @@ function wireEvents() {
   el.btnOpenEmpty.addEventListener('click', openFromDialog);
   if (el.btnClear) el.btnClear.addEventListener('click', resetWorkspace);
   if (el.btnTheme) el.btnTheme.addEventListener('click', toggleTheme);
-  el.btnDocs.addEventListener('click', addDocs);
-  el.btnGuide.addEventListener('click', downloadUserGuide);
   el.btnAiFocus.addEventListener('click', toggleAiFocus);
+
+  if (el.btnHelp && el.helpMenu) {
+    el.btnHelp.addEventListener('click', (e) => {
+      e.stopPropagation();
+      el.helpMenu.classList.toggle('hidden');
+    });
+    document.addEventListener('click', () => el.helpMenu.classList.add('hidden'));
+    el.helpMenu.addEventListener('click', (e) => e.stopPropagation());
+  }
+
+  if (el.btnDocs) el.btnDocs.addEventListener('click', () => { el.helpMenu.classList.add('hidden'); addDocs(); });
+  if (el.btnGuide) el.btnGuide.addEventListener('click', () => { el.helpMenu.classList.add('hidden'); downloadUserGuide(); });
+
+  if (el.btnCheckUpdate) {
+    el.btnCheckUpdate.addEventListener('click', () => {
+      el.helpMenu.classList.add('hidden');
+      if (api.checkUpdate) {
+        el.btnCheckUpdate.classList.add('checking');
+        api.checkUpdate();
+        setTimeout(() => el.btnCheckUpdate.classList.remove('checking'), 8000);
+      }
+    });
+  }
+  if (el.btnUpdateDismiss) {
+    el.btnUpdateDismiss.addEventListener('click', () => el.updateBar.classList.add('hidden'));
+  }
+  if (el.btnUpdateYes) {
+    el.btnUpdateYes.addEventListener('click', () => {
+      showUpdatePhase('downloading');
+      if (api.downloadUpdate) api.downloadUpdate();
+    });
+  }
+  if (el.btnUpdateNo) {
+    el.btnUpdateNo.addEventListener('click', () => el.updateModalOverlay.classList.add('hidden'));
+  }
+  if (el.btnUpdateInstall) {
+    el.btnUpdateInstall.addEventListener('click', () => {
+      if (api.installUpdate) api.installUpdate();
+    });
+  }
+  if (el.btnUpdateErrorClose) {
+    el.btnUpdateErrorClose.addEventListener('click', () => el.updateModalOverlay.classList.add('hidden'));
+  }
 
   el.dropZone.addEventListener('dragover', (event) => {
     event.preventDefault();
@@ -502,18 +572,85 @@ function handleParseEvent(event) {
   }
 }
 
+function showUpdatePhase(phase) {
+  [
+    ['ask', el.updatePhaseAsk],
+    ['downloading', el.updatePhaseDownloading],
+    ['done', el.updatePhaseDone],
+    ['error', el.updatePhaseError]
+  ].forEach(([key, node]) => node && node.classList.toggle('hidden', key !== phase));
+}
+
 function handleUpdateStatus(status) {
-  if (!status || !el.parseStatus) return;
-  if (status.state === 'checking') {
-    el.parseStatus.textContent = 'Checking for app updates...';
-  } else if (status.state === 'available') {
-    el.parseStatus.textContent = `Downloading update ${status.version || ''}...`.trim();
-  } else if (status.state === 'downloading') {
-    el.parseStatus.textContent = `Downloading update ${status.percent || 0}%...`;
-  } else if (status.state === 'downloaded') {
-    el.parseStatus.textContent = `Update ${status.version || ''} ready to install.`.trim();
-  } else if (status.state === 'error') {
-    el.parseStatus.textContent = `Update check failed: ${status.error || 'unknown error'}`;
+  if (!status) return;
+  const { state, version, percent, error } = status;
+
+  if (el.btnCheckUpdate) el.btnCheckUpdate.classList.remove('checking');
+
+  if (state === 'checking') {
+    if (el.updateBar) {
+      el.updateBar.classList.remove('hidden');
+      el.updateBar.dataset.state = 'checking';
+      if (el.updateBarIcon) el.updateBarIcon.textContent = '↻';
+      if (el.updateBarMsg) el.updateBarMsg.textContent = 'Checking for updates...';
+    }
+    return;
+  }
+
+  if (el.updateBar) el.updateBar.classList.add('hidden');
+
+  if (state === 'not-available') return;
+
+  if (state === 'available') {
+    if (el.updateModalVersion) {
+      el.updateModalVersion.textContent = version ? `New version: v${version}` : 'A new version is available';
+    }
+    showUpdatePhase('ask');
+    if (el.updateModalOverlay) el.updateModalOverlay.classList.remove('hidden');
+    return;
+  }
+
+  if (state === 'downloading') {
+    const pct = Math.round(percent || 0);
+    showUpdatePhase('downloading');
+    if (el.updateModalOverlay) el.updateModalOverlay.classList.remove('hidden');
+    if (el.updateDlFill) el.updateDlFill.style.width = `${pct}%`;
+    if (el.updateDlPct) el.updateDlPct.textContent = `${pct}%`;
+    if (el.updateDlSize) {
+      const xferred = status.transferred || 0;
+      const total = status.total || 0;
+      el.updateDlSize.textContent = total > 0
+        ? `${formatBytes(xferred)} / ${formatBytes(total)}`
+        : formatBytes(xferred);
+    }
+    if (el.updateDlSpeed && status.bytesPerSecond > 0) {
+      el.updateDlSpeed.textContent = `${formatBytes(status.bytesPerSecond)}/s`;
+    }
+    return;
+  }
+
+  if (state === 'downloaded') {
+    if (el.updateDonVersion) {
+      el.updateDonVersion.textContent = version ? `v${version} is ready` : 'Ready to install';
+    }
+    showUpdatePhase('done');
+    if (el.updateModalOverlay) el.updateModalOverlay.classList.remove('hidden');
+    return;
+  }
+
+  if (state === 'error') {
+    const isModalOpen = el.updateModalOverlay && !el.updateModalOverlay.classList.contains('hidden');
+    if (isModalOpen) {
+      if (el.updateErrorMsg) el.updateErrorMsg.textContent = error || 'Unknown error';
+      showUpdatePhase('error');
+    } else {
+      if (el.updateBar) {
+        el.updateBar.classList.remove('hidden');
+        el.updateBar.dataset.state = 'error';
+        if (el.updateBarIcon) el.updateBarIcon.textContent = '!';
+        if (el.updateBarMsg) el.updateBarMsg.textContent = `Update error: ${error || 'unknown'}`;
+      }
+    }
   }
 }
 
@@ -3030,4 +3167,212 @@ function shortPath(filePath) {
 function normalizeLevelName(level) {
   const text = String(level || '').toLowerCase();
   return LEVELS.find((item) => item.toLowerCase() === text) || level;
+}
+
+function formatBytes(bytes) {
+  if (!bytes || bytes < 0) return '0 B';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+async function loadAppVersion() {
+  if (!el.brandVersion || !api.getAppVersion) return;
+  try {
+    const version = await api.getAppVersion();
+    if (version) el.brandVersion.textContent = `v${version}`;
+  } catch (_e) {
+    // keep static fallback from HTML
+  }
+}
+
+function initStarsCanvas() {
+  const canvas = el.starsCanvas;
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+
+  let W = 0, H = 0;
+  let bgStars = [];
+  let fallingStars = [];
+  const shootingStars = [];
+  let rafId = null;
+  let lastTime = 0;
+  let shootingTimer = 0;
+  let nextShootingIn = randomShootingInterval();
+
+  function randomShootingInterval() {
+    return 2500 + Math.random() * 4500;
+  }
+
+  function resize() {
+    const parent = canvas.parentElement;
+    if (!parent) return;
+    W = canvas.width = parent.offsetWidth;
+    H = canvas.height = parent.offsetHeight;
+    bgStars = buildBgStars(220);
+    fallingStars = buildFallingStars(28);
+  }
+
+  function randomColor() {
+    const r = Math.random();
+    if (r < 0.6) return '#ffffff';
+    if (r < 0.8) return '#39d98a';
+    return '#00b8a9';
+  }
+
+  function buildBgStars(count) {
+    return Array.from({ length: count }, () => ({
+      x: Math.random() * W,
+      y: Math.random() * H,
+      r: Math.random() * 1.4 + 0.2,
+      base: Math.random() * 0.5 + 0.15,
+      phase: Math.random() * Math.PI * 2,
+      freq: Math.random() * 0.025 + 0.006,
+      color: randomColor()
+    }));
+  }
+
+  function newFallingStar() {
+    return {
+      x: Math.random() * W,
+      y: -10 - Math.random() * H * 0.3,
+      vx: (Math.random() - 0.5) * 0.4,
+      vy: Math.random() * 0.9 + 0.35,
+      r: Math.random() * 1.6 + 0.4,
+      opacity: Math.random() * 0.6 + 0.3,
+      tail: Math.random() * 18 + 6,
+      color: Math.random() < 0.55 ? '#39d98a' : '#00b8a9'
+    };
+  }
+
+  function buildFallingStars(count) {
+    return Array.from({ length: count }, () => {
+      const s = newFallingStar();
+      s.y = Math.random() * H;
+      return s;
+    });
+  }
+
+  function spawnShootingStar() {
+    const angle = (20 + Math.random() * 25) * (Math.PI / 180);
+    const speed = 8 + Math.random() * 7;
+    return {
+      x: Math.random() * W * 0.65,
+      y: Math.random() * H * 0.45,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      length: 80 + Math.random() * 120,
+      opacity: 1,
+      w: 0.8 + Math.random() * 1.2
+    };
+  }
+
+  function drawBgStars(dt) {
+    for (const s of bgStars) {
+      s.phase += s.freq * dt * 0.06;
+      const opacity = s.base * (0.55 + 0.45 * Math.sin(s.phase));
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+      ctx.fillStyle = s.color;
+      ctx.globalAlpha = opacity;
+      ctx.fill();
+    }
+  }
+
+  function drawFallingStars(dt) {
+    for (let i = 0; i < fallingStars.length; i++) {
+      const s = fallingStars[i];
+      s.x += s.vx * dt * 0.06;
+      s.y += s.vy * dt * 0.06;
+      if (s.y > H + 20) {
+        fallingStars[i] = newFallingStar();
+        continue;
+      }
+      const grad = ctx.createLinearGradient(s.x, s.y - s.tail, s.x + s.vx * 4, s.y);
+      grad.addColorStop(0, 'transparent');
+      grad.addColorStop(1, s.color);
+      ctx.beginPath();
+      ctx.moveTo(s.x, s.y - s.tail);
+      ctx.lineTo(s.x, s.y);
+      ctx.strokeStyle = grad;
+      ctx.globalAlpha = s.opacity * 0.55;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+      ctx.fillStyle = s.color;
+      ctx.globalAlpha = s.opacity;
+      ctx.fill();
+    }
+  }
+
+  function drawShootingStars(dt) {
+    for (let i = shootingStars.length - 1; i >= 0; i--) {
+      const s = shootingStars[i];
+      s.x += s.vx * dt * 0.06;
+      s.y += s.vy * dt * 0.06;
+      s.opacity -= 0.012 * dt * 0.06;
+      if (s.opacity <= 0 || s.x > W + 150 || s.y > H + 150) {
+        shootingStars.splice(i, 1);
+        continue;
+      }
+      const mag = Math.hypot(s.vx, s.vy);
+      const tx = s.x - (s.vx / mag) * s.length;
+      const ty = s.y - (s.vy / mag) * s.length;
+      const grad = ctx.createLinearGradient(tx, ty, s.x, s.y);
+      grad.addColorStop(0, 'transparent');
+      grad.addColorStop(0.6, `rgba(200, 255, 230, ${s.opacity * 0.4})`);
+      grad.addColorStop(1, `rgba(255, 255, 255, ${s.opacity})`);
+      ctx.beginPath();
+      ctx.moveTo(tx, ty);
+      ctx.lineTo(s.x, s.y);
+      ctx.strokeStyle = grad;
+      ctx.globalAlpha = s.opacity;
+      ctx.lineWidth = s.w;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.w + 1, 0, Math.PI * 2);
+      const headGrad = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, s.w + 3);
+      headGrad.addColorStop(0, `rgba(255,255,255,${s.opacity})`);
+      headGrad.addColorStop(1, 'transparent');
+      ctx.fillStyle = headGrad;
+      ctx.globalAlpha = s.opacity;
+      ctx.fill();
+    }
+  }
+
+  function frame(timestamp) {
+    rafId = requestAnimationFrame(frame);
+    const dt = Math.min(timestamp - lastTime, 50);
+    lastTime = timestamp;
+
+    ctx.clearRect(0, 0, W, H);
+    drawBgStars(dt);
+    drawFallingStars(dt);
+
+    shootingTimer += dt;
+    if (shootingTimer >= nextShootingIn) {
+      shootingTimer = 0;
+      nextShootingIn = randomShootingInterval();
+      shootingStars.push(spawnShootingStar());
+    }
+    drawShootingStars(dt);
+    ctx.globalAlpha = 1;
+  }
+
+  resize();
+  const ro = new ResizeObserver(resize);
+  ro.observe(canvas.parentElement);
+  rafId = requestAnimationFrame((ts) => { lastTime = ts; frame(ts); });
+
+  const mo = new MutationObserver(() => {
+    const hidden = el.dropZone.classList.contains('hidden');
+    if (hidden && rafId) {
+      cancelAnimationFrame(rafId);
+      rafId = null;
+    } else if (!hidden && !rafId) {
+      rafId = requestAnimationFrame((ts) => { lastTime = ts; frame(ts); });
+    }
+  });
+  mo.observe(el.dropZone, { attributes: true, attributeFilter: ['class'] });
 }

@@ -1,6 +1,6 @@
 {
   "name": "nexus-dlt-ai-desktop",
-  "version": "1.0.0",
+  "version": "1.0.3",
   "description": "Desktop DLT log viewer and AI diagnostic workbench for Built-in Cam ECU logs.",
   "main": "electron-main.js",
   "type": "commonjs",
@@ -53,9 +53,8 @@
       ]
     },
     "nsis": {
-      "oneClick": false,
+      "oneClick": true,
       "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "BLTN-Analysis Log"

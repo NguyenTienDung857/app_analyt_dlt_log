@@ -29,6 +29,11 @@ contextBridge.exposeInMainWorld('nexusApi', {
   sequenceDiagram: (payload) => ipcRenderer.invoke('ai:sequence', payload),
   reproductionScript: (payload) => ipcRenderer.invoke('ai:script', payload),
 
+  getAppVersion: () => ipcRenderer.invoke('app:get-version'),
+  installUpdate: () => ipcRenderer.invoke('app:install-update'),
+  downloadUpdate: () => ipcRenderer.invoke('app:download-update'),
+  checkUpdate: () => ipcRenderer.invoke('app:check-update'),
+
   getDocsStatus: () => ipcRenderer.invoke('docs:status'),
   openDocsDialog: () => ipcRenderer.invoke('docs:open-dialog'),
   ingestDocs: (paths) => ipcRenderer.invoke('docs:ingest', paths)

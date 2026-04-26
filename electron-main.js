@@ -57,32 +57,26 @@ function setupAutoUpdater() {
   if (autoUpdaterStarted || !app.isPackaged) return;
   autoUpdaterStarted = true;
 
-  autoUpdater.autoDownload = true;
+  autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
 
   autoUpdater.on('checking-for-update', () => sendUpdateStatus({ state: 'checking' }));
   autoUpdater.on('update-available', (info) => sendUpdateStatus({ state: 'available', version: info.version }));
   autoUpdater.on('update-not-available', () => sendUpdateStatus({ state: 'not-available' }));
   autoUpdater.on('download-progress', (progress) => {
-    sendUpdateStatus({ state: 'downloading', percent: Math.round(progress.percent || 0) });
+    sendUpdateStatus({
+      state: 'downloading',
+      percent: Math.round(progress.percent || 0),
+      transferred: progress.transferred || 0,
+      total: progress.total || 0,
+      bytesPerSecond: progress.bytesPerSecond || 0
+    });
   });
   autoUpdater.on('error', (error) => {
     sendUpdateStatus({ state: 'error', error: error.message });
   });
-  autoUpdater.on('update-downloaded', async (info) => {
+  autoUpdater.on('update-downloaded', (info) => {
     sendUpdateStatus({ state: 'downloaded', version: info.version });
-    const result = await dialog.showMessageBox(mainWindow, {
-      type: 'info',
-      buttons: ['Restart and install', 'Later'],
-      defaultId: 0,
-      cancelId: 1,
-      title: 'Update ready',
-      message: `BLTN-Analysis Log ${info.version} is ready to install.`,
-      detail: 'Restart the app now to install the update. If you choose Later, it will be installed when the app exits.'
-    });
-    if (result.response === 0) {
-      autoUpdater.quitAndInstall(false, true);
-    }
   });
 
   setTimeout(() => {
@@ -214,6 +208,22 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+ipcMain.handle('app:get-version', () => app.getVersion());
+ipcMain.handle('app:install-update', () => autoUpdater.quitAndInstall(true, true));
+ipcMain.handle('app:download-update', () => autoUpdater.downloadUpdate().catch((error) => {
+  sendUpdateStatus({ state: 'error', error: error.message });
+}));
+ipcMain.handle('app:check-update', () => {
+  if (!app.isPackaged) {
+    sendUpdateStatus({ state: 'error', error: 'Chỉ hoạt động khi app đã được cài đặt (không phải chế độ dev).' });
+    return;
+  }
+  sendUpdateStatus({ state: 'checking' });
+  autoUpdater.checkForUpdates().catch((error) => {
+    sendUpdateStatus({ state: 'error', error: error.message });
+  });
 });
 
 ipcMain.handle('logs:open-dialog', async () => {

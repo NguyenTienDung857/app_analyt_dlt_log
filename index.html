@@ -12,21 +12,107 @@
       <div class="brand">
         <div class="brand-mark">BL</div>
         <div class="brand-copy">
-          <h1>BLTN-Analysis Log</h1>
+          <h1>BLTN-Analysis Log <span class="brand-version" id="brand-version">v1.0.1</span></h1>
           <p>DLT timeline and AI diagnostics</p>
         </div>
       </div>
       <div class="top-actions">
         <button id="btn-open" class="btn primary">Open DLT</button>
         <button id="btn-ai-focus" class="btn">Log AI Focus</button>
-        <button id="btn-docs" class="btn">Add ECU Docs</button>
-        <button id="btn-guide" class="btn">Download Guide</button>
+        <div class="help-dropdown" id="help-dropdown">
+          <button id="btn-help" class="btn help-trigger">Help ▾</button>
+          <div class="help-menu hidden" id="help-menu">
+            <button class="help-menu-item" id="btn-docs">Add ECU Docs</button>
+            <button class="help-menu-item" id="btn-guide">Download Guide</button>
+            <div class="help-menu-divider"></div>
+            <button class="help-menu-item" id="btn-check-update">Check for Updates</button>
+          </div>
+        </div>
       </div>
     </header>
 
+    <div id="update-bar" class="update-bar hidden" data-state="">
+      <div class="update-bar-icon" id="update-bar-icon">↻</div>
+      <span id="update-bar-msg"></span>
+      <button id="btn-update-dismiss" class="btn small update-dismiss-btn" title="Dismiss">✕</button>
+    </div>
+
+    <div id="update-modal-overlay" class="update-modal-overlay hidden">
+      <div class="update-modal" id="update-modal" data-phase="ask">
+
+        <div class="update-modal-phase update-phase-ask">
+          <div class="update-modal-icon-wrap">
+            <div class="update-modal-icon">↓</div>
+            <div class="update-modal-icon-ring"></div>
+          </div>
+          <h3 class="update-modal-title">Update Available!</h3>
+          <p class="update-modal-version" id="update-modal-version">Loading info...</p>
+          <p class="update-modal-sub">Would you like to update now?</p>
+          <div class="update-modal-actions">
+            <button id="btn-update-yes" class="btn primary update-modal-btn-yes">Update Now</button>
+            <button id="btn-update-no" class="btn update-modal-btn-no">Later</button>
+          </div>
+        </div>
+
+        <div class="update-modal-phase update-phase-downloading hidden">
+          <div class="update-downloading-icon">↓</div>
+          <h3 class="update-modal-title">Downloading Update...</h3>
+          <div class="update-dl-progress">
+            <div class="update-dl-track">
+              <div id="update-dl-fill" class="update-dl-fill"></div>
+            </div>
+            <span id="update-dl-pct" class="update-dl-pct">0%</span>
+          </div>
+          <div class="update-dl-meta">
+            <span id="update-dl-size">Preparing...</span>
+            <span id="update-dl-speed"></span>
+          </div>
+        </div>
+
+        <div class="update-modal-phase update-phase-done hidden">
+          <div class="update-done-icon">✓</div>
+          <h3 class="update-modal-title">Update Ready!</h3>
+          <p class="update-modal-version" id="update-done-version"></p>
+          <p class="update-modal-sub">The update has been downloaded.<br>Restart now to apply it.</p>
+          <button id="btn-update-install" class="btn primary update-modal-btn-full">Restart Now</button>
+        </div>
+
+        <div class="update-modal-phase update-phase-error hidden">
+          <div class="update-error-icon">!</div>
+          <h3 class="update-modal-title">Update Error</h3>
+          <p class="update-modal-sub update-error-msg" id="update-error-msg"></p>
+          <div class="update-modal-actions">
+            <button id="btn-update-error-close" class="btn">Close</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
     <section id="drop-zone" class="drop-zone">
+      <canvas id="stars-canvas" class="stars-canvas"></canvas>
+      <div class="drop-zone-glow glow-1"></div>
+      <div class="drop-zone-glow glow-2"></div>
+      <div class="drop-zone-glow glow-3"></div>
+      <div class="drop-particles">
+        <span class="particle p1"></span>
+        <span class="particle p2"></span>
+        <span class="particle p3"></span>
+        <span class="particle p4"></span>
+        <span class="particle p5"></span>
+        <span class="particle p6"></span>
+        <span class="particle p7"></span>
+        <span class="particle p8"></span>
+        <span class="particle p9"></span>
+        <span class="particle p10"></span>
+      </div>
       <div class="drop-card">
-        <div class="drop-orbit"></div>
+        <div class="drop-orbit">
+          <div class="orbit-inner"></div>
+          <div class="orbit-dot"></div>
+        </div>
+        <div class="drop-ring ring-2"></div>
+        <div class="drop-ring ring-3"></div>
         <h2>Drop .dlt, .log, or .bin files here</h2>
         <p>Multiple files are supported. Logs are parsed in a worker and shown as one scrollable timeline.</p>
         <button id="btn-open-empty" class="btn primary large">Browse Files</button>
