@@ -34,6 +34,7 @@ function createWindow() {
     minHeight: 760,
     backgroundColor: '#08110f',
     title: 'BLTN-Analysis Log',
+    icon: path.join(APP_ROOT, 'YuRa-256.png'),
     webPreferences: {
       preload: path.join(APP_ROOT, 'preload.js'),
       contextIsolation: true,

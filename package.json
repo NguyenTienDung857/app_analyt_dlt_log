@@ -1,6 +1,6 @@
 {
   "name": "nexus-dlt-ai-desktop",
-  "version": "1.0.3",
+  "version": "1.0.5",
   "description": "Desktop DLT log viewer and AI diagnostic workbench for Built-in Cam ECU logs.",
   "main": "electron-main.js",
   "type": "commonjs",
@@ -24,6 +24,7 @@
     "appId": "com.bltn.analysis-log",
     "productName": "BLTN-Analysis Log",
     "artifactName": "BLTN-Analysis-Log-Setup-${version}.${ext}",
+    "icon": "YuRa-256.png",
     "asar": false,
     "files": [
       "electron-main.js",
@@ -31,6 +32,8 @@
       "index.html",
       "renderer.js",
       "style.css",
+      "YuRa.ico",
+      "YuRa-256.png",
       "README.md",
       "USER_GUIDE_EN.md",
       "package.json",
@@ -41,6 +44,7 @@
       "output": "dist"
     },
     "win": {
+      "icon": "YuRa-256.png",
       "signAndEditExecutable": false,
       "verifyUpdateCodeSignature": false,
       "target": [
