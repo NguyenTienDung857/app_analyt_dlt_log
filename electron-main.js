@@ -1,4 +1,5 @@
 const { app, BrowserWindow, clipboard, dialog, ipcMain } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const fs = require('node:fs');
 const path = require('node:path');
 const { Worker } = require('node:worker_threads');
@@ -9,6 +10,7 @@ const { RagStore } = require('./src/services/ragStore');
 const { writeExportFile } = require('./src/services/exporter');
 
 const APP_ROOT = __dirname;
+const UPDATE_CHECK_DELAY_MS = 5000;
 const DEFAULT_AI_CONFIG = {
   baseUrl: 'https://rsqd56n.9router.com/v1',
   model: 'cx/gpt-5.5',
@@ -22,6 +24,7 @@ const DEFAULT_AI_CONFIG = {
 let mainWindow = null;
 let parseWorker = null;
 let ragStore = null;
+let autoUpdaterStarted = false;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -42,6 +45,51 @@ function createWindow() {
   mainWindow.setMenuBarVisibility(false);
   mainWindow.setAutoHideMenuBar(true);
   mainWindow.loadFile(path.join(APP_ROOT, 'index.html'));
+}
+
+function sendUpdateStatus(status) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('app:update-status', status);
+  }
+}
+
+function setupAutoUpdater() {
+  if (autoUpdaterStarted || !app.isPackaged) return;
+  autoUpdaterStarted = true;
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on('checking-for-update', () => sendUpdateStatus({ state: 'checking' }));
+  autoUpdater.on('update-available', (info) => sendUpdateStatus({ state: 'available', version: info.version }));
+  autoUpdater.on('update-not-available', () => sendUpdateStatus({ state: 'not-available' }));
+  autoUpdater.on('download-progress', (progress) => {
+    sendUpdateStatus({ state: 'downloading', percent: Math.round(progress.percent || 0) });
+  });
+  autoUpdater.on('error', (error) => {
+    sendUpdateStatus({ state: 'error', error: error.message });
+  });
+  autoUpdater.on('update-downloaded', async (info) => {
+    sendUpdateStatus({ state: 'downloaded', version: info.version });
+    const result = await dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      buttons: ['Restart and install', 'Later'],
+      defaultId: 0,
+      cancelId: 1,
+      title: 'Update ready',
+      message: `BLTN-Analysis Log ${info.version} is ready to install.`,
+      detail: 'Restart the app now to install the update. If you choose Later, it will be installed when the app exits.'
+    });
+    if (result.response === 0) {
+      autoUpdater.quitAndInstall(false, true);
+    }
+  });
+
+  setTimeout(() => {
+    autoUpdater.checkForUpdates().catch((error) => {
+      sendUpdateStatus({ state: 'error', error: error.message });
+    });
+  }, UPDATE_CHECK_DELAY_MS);
 }
 
 function getConfigPath() {
@@ -151,10 +199,12 @@ function stopParseWorker() {
 app.whenReady().then(async () => {
   await rebuildDefaultRag();
   createWindow();
+  setupAutoUpdater();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
+      setupAutoUpdater();
     }
   });
 });

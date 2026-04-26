@@ -21,6 +21,71 @@ npm.cmd run check
 npm.cmd run syntax
 ```
 
+## Build file cài đặt Windows
+
+Chạy:
+
+```powershell
+.\build.bat
+```
+
+Script sẽ:
+- Cài dependency nếu chưa có `node_modules`.
+- Chạy `npm.cmd run syntax`.
+- Chạy `npm.cmd run check`.
+- Build installer Windows bằng `electron-builder`.
+
+Kết quả nằm trong thư mục `dist`.
+
+File quan trọng sau khi build:
+- `BLTN-Analysis-Log-Setup-<version>.exe`: file cài đặt gửi cho người dùng.
+- `latest.yml`: metadata để auto-update biết bản mới.
+- `*.blockmap`: file hỗ trợ tải update hiệu quả hơn.
+
+Build hiện đang tạo installer unsigned để dùng nội bộ. Nếu phát hành rộng, nên mua code-signing certificate và bật lại signing để Windows SmartScreen ít cảnh báo hơn.
+
+## Auto update bằng GitHub Releases
+
+App dùng `electron-updater` + `electron-builder` GitHub provider.
+
+Cấu hình hiện tại trong `package.json`:
+
+```json
+"publish": [
+  {
+    "provider": "github",
+    "owner": "NguyenTienDung857",
+    "repo": "app_analyt_dlt_log"
+  }
+]
+```
+
+Quy trình phát hành bản update mới:
+1. Tăng `version` trong `package.json` (ví dụ `1.0.0` -> `1.0.1`).
+2. Chạy `build.bat`.
+3. Vào GitHub repo `NguyenTienDung857/app_analyt_dlt_log`.
+4. Tạo Release mới với tag trùng version, ví dụ `v1.0.1`.
+5. Upload các file trong `dist` vào Assets của Release:
+   - `BLTN-Analysis-Log-Setup-<version>.exe`
+   - `latest.yml`
+   - `*.blockmap`
+6. Publish Release.
+7. Khi người dùng mở app đã cài, app sẽ tự kiểm tra GitHub Releases, tải bản mới, rồi hỏi restart để cài.
+
+Lưu ý:
+- Repo nên là public nếu muốn app tự update mà không cần token trong máy người dùng.
+- Installer đầu tiên đưa cho người dùng phải được build sau khi cấu hình GitHub provider đúng `owner/repo`.
+
+Nếu muốn upload release bằng CLI thay vì kéo-thả thủ công:
+1. Cài GitHub CLI (`gh`).
+2. Login bằng `gh auth login`.
+3. Chạy `build.bat`.
+4. Tạo release bằng lệnh dạng:
+
+```powershell
+gh release create v1.0.1 dist\*.exe dist\*.blockmap dist\latest.yml --title "v1.0.1" --notes "Update release"
+```
+
 ## Mở log
 
 - Bấm `Open DLT` hoặc kéo-thả file vào màn hình đầu.

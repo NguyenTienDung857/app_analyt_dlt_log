@@ -215,9 +215,63 @@ After enabling `Suggest context after opening logs`, the app selects a bug-focus
 
 Click `Download Guide` in the top bar to save this user guide (`USER_GUIDE_EN.md`) to a location you choose.
 
-## 11. Troubleshooting
+## 11. Build and Distribute the App
+
+Run:
+
+```powershell
+.\build.bat
+```
+
+The script installs dependencies if needed, runs validation, and builds a Windows installer into the `dist` folder.
+
+Generated files:
+
+- `BLTN-Analysis-Log-Setup-<version>.exe`: installer to share with users
+- `latest.yml`: update metadata
+- `*.blockmap`: update download metadata
+
+The current build creates an unsigned installer for internal distribution. For broader distribution, use a code-signing certificate and re-enable signing to reduce Windows SmartScreen warnings.
+
+## 12. Auto Update Workflow
+
+The app uses `electron-updater` with an `electron-builder` GitHub provider.
+
+Current `package.json` publish config:
+
+```json
+"publish": [
+  {
+    "provider": "github",
+    "owner": "NguyenTienDung857",
+    "repo": "app_analyt_dlt_log"
+  }
+]
+```
+
+For every new release:
+
+1. Increase `version` in `package.json`.
+2. Run `build.bat`.
+3. Open GitHub repo `NguyenTienDung857/app_analyt_dlt_log`.
+4. Create a new Release with a matching tag, for example `v1.0.1`.
+5. Upload the generated installer `.exe`, `latest.yml`, and `*.blockmap` files from `dist` as Release assets.
+6. Publish the Release.
+7. Installed apps check GitHub Releases on launch, download the new version, and ask the user to restart/install.
+
+Important:
+
+- The repository should be public if installed apps need to update without a GitHub token on the user machine.
+- The first installer you give users must already contain the correct GitHub `owner/repo` config.
+
+If GitHub CLI is installed and authenticated, you can publish assets with:
+
+```powershell
+gh release create v1.0.1 dist\*.exe dist\*.blockmap dist\latest.yml --title "v1.0.1" --notes "Update release"
+```
+
+## 13. Troubleshooting
 
 - If AI returns an error, verify Base URL / API key / model in `AI / RAG Config`.
 - If results are too broad, narrow the view first using range filter + AI Search, then use AI `Range` or `Filtered`.
 - If payloads are non-verbose and not human-readable, ingest FIBEX/ARXML docs and retry AI analysis.
-

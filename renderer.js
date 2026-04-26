@@ -2,9 +2,12 @@ const api = window.nexusApi;
 
 const LEVELS = ['Fatal', 'Error', 'Warn', 'Info', 'Debug', 'Verbose', 'Trace', 'Control', 'Unknown'];
 const MIN_ROW_HEIGHT = 34;
-const ROW_LINE_HEIGHT = 17;
-const ROW_VERTICAL_PADDING = 10;
+const ROW_LINE_HEIGHT = 18;
+const ROW_VERTICAL_PADDING = 16;
 const MAX_RENDER_ROWS = 120;
+const MIN_LOG_SCROLL_THUMB_HEIGHT = 30;
+const VIRTUAL_SCROLL_END_PADDING = MIN_ROW_HEIGHT * 2;
+const ESTIMATED_MONO_CHAR_WIDTH = 7.8;
 const DEFAULT_LOG_COLUMNS = [66, 108, 76, 640];
 const MIN_LOG_COLUMNS = [42, 72, 52, 180];
 const DEFAULT_RUNTIME_MODEL = 'gpt-5.2';
@@ -163,6 +166,9 @@ function init() {
   initLogColumnResize();
   applyLogColumnTemplate();
   api.onParseEvent(handleParseEvent);
+  if (api.onUpdateStatus) {
+    api.onUpdateStatus(handleUpdateStatus);
+  }
   loadAiConfig();
   refreshDocsStatus();
   resetWorkspace();
@@ -339,18 +345,18 @@ function handleLogScrollbarPointerDown(event) {
   if (!state.filtered.length) return;
   event.preventDefault();
 
-  const railRect = el.logScrollbar.getBoundingClientRect();
-  const thumbRect = el.logScrollbarThumb.getBoundingClientRect();
-  const scrollable = Math.max(0, el.virtualScroll.scrollHeight - el.virtualScroll.clientHeight);
-  const railScrollable = Math.max(1, railRect.height - thumbRect.height);
+  const geometry = getLogScrollbarGeometry();
+  const thumbHeight = el.logScrollbarThumb.getBoundingClientRect().height || MIN_LOG_SCROLL_THUMB_HEIGHT;
+  const scrollable = getLogScrollRange(geometry.trackHeight).scrollable;
+  const railScrollable = Math.max(1, geometry.trackHeight - thumbHeight);
   if (!scrollable) return;
 
   const pointerOffset = event.target === el.logScrollbarThumb
-    ? event.clientY - thumbRect.top
-    : thumbRect.height / 2;
+    ? event.clientY - el.logScrollbarThumb.getBoundingClientRect().top
+    : thumbHeight / 2;
 
   const moveTo = (clientY) => {
-    const top = clampNumber(clientY - railRect.top - pointerOffset, 0, railScrollable);
+    const top = clampNumber(clientY - geometry.trackTop - pointerOffset, 0, railScrollable);
     el.virtualScroll.scrollTop = (top / railScrollable) * scrollable;
     scheduleVirtualRows();
     updateLogScrollbar();
@@ -368,6 +374,43 @@ function handleLogScrollbarPointerDown(event) {
 
   window.addEventListener('pointermove', handleMove);
   window.addEventListener('pointerup', handleUp, { once: true });
+}
+
+function getLogScrollbarGeometry() {
+  const railRect = el.logScrollbar.getBoundingClientRect();
+  const scrollRect = el.virtualScroll.getBoundingClientRect();
+  const panelRect = el.logScrollbar.closest('.log-panel')?.getBoundingClientRect();
+  const trackTop = Math.max(
+    railRect.top,
+    scrollRect.top,
+    panelRect ? panelRect.top : railRect.top
+  );
+  const trackBottom = Math.min(
+    railRect.bottom,
+    scrollRect.bottom,
+    panelRect ? panelRect.bottom : railRect.bottom
+  );
+  const trackHeight = Math.max(1, trackBottom - trackTop);
+  return {
+    railTop: railRect.top,
+    trackTop,
+    trackHeight,
+    trackOffsetTop: Math.max(0, trackTop - railRect.top)
+  };
+}
+
+function getLogScrollRange(visibleHeight) {
+  const pageIndices = getCurrentPageIndices();
+  const metrics = buildVirtualMetrics(pageIndices);
+  const fallbackHeight = Math.max(1, Number(visibleHeight) || 1);
+  const viewportHeight = Math.max(1, el.virtualScroll.clientHeight || fallbackHeight);
+  const endPadding = pageIndices.length ? VIRTUAL_SCROLL_END_PADDING : 0;
+  const totalHeight = Math.max((metrics.totalHeight || 0) + endPadding, viewportHeight);
+  return {
+    scrollHeight: totalHeight,
+    clientHeight: viewportHeight,
+    scrollable: Math.max(0, totalHeight - viewportHeight)
+  };
 }
 
 function toggleAiPromptPanel() {
@@ -456,6 +499,21 @@ function handleParseEvent(event) {
 
   if (event.type === 'error') {
     el.parseStatus.textContent = `Parse error: ${event.error}`;
+  }
+}
+
+function handleUpdateStatus(status) {
+  if (!status || !el.parseStatus) return;
+  if (status.state === 'checking') {
+    el.parseStatus.textContent = 'Checking for app updates...';
+  } else if (status.state === 'available') {
+    el.parseStatus.textContent = `Downloading update ${status.version || ''}...`.trim();
+  } else if (status.state === 'downloading') {
+    el.parseStatus.textContent = `Downloading update ${status.percent || 0}%...`;
+  } else if (status.state === 'downloaded') {
+    el.parseStatus.textContent = `Update ${status.version || ''} ready to install.`.trim();
+  } else if (status.state === 'error') {
+    el.parseStatus.textContent = `Update check failed: ${status.error || 'unknown error'}`;
   }
 }
 
@@ -658,7 +716,7 @@ function renderVirtualRows() {
   }
   end = Math.min(count, Math.max(end, start + 1));
 
-  el.virtualSpacer.style.height = `${metrics.totalHeight}px`;
+  el.virtualSpacer.style.height = `${metrics.totalHeight + (count ? VIRTUAL_SCROLL_END_PADDING : 0)}px`;
   el.rowsLayer.style.transform = `translateY(${metrics.offsets[start] || 0}px)`;
 
   const rows = [];
@@ -709,7 +767,7 @@ function buildVirtualMetrics(pageIndices) {
 function estimateRowHeight(message, payloadWidth) {
   const payload = String(message?.payload || '');
   if (!payload) return MIN_ROW_HEIGHT;
-  const charsPerLine = Math.max(24, Math.floor((payloadWidth - 18) / 7.2));
+  const charsPerLine = Math.max(24, Math.floor((payloadWidth - 24) / ESTIMATED_MONO_CHAR_WIDTH));
   const lines = payload.split(/\r?\n/).reduce((total, line) => {
     return total + Math.max(1, Math.ceil(line.length / charsPerLine));
   }, 0);
@@ -765,21 +823,21 @@ function renderRow(message, localIndex, rowHeight) {
 
 function updateLogScrollbar() {
   if (!el.logScrollbar || !el.logScrollbarThumb) return;
-  const railHeight = el.logScrollbar.clientHeight || 1;
-  const scrollHeight = el.virtualScroll.scrollHeight || 1;
-  const clientHeight = el.virtualScroll.clientHeight || 1;
-  const scrollable = Math.max(0, scrollHeight - clientHeight);
+  const geometry = getLogScrollbarGeometry();
+  const railHeight = geometry.trackHeight;
+  const { scrollHeight, clientHeight, scrollable } = getLogScrollRange(railHeight);
 
   if (!scrollable || !state.filtered.length) {
     el.logScrollbar.classList.add('disabled');
-    el.logScrollbarThumb.style.height = `${Math.max(30, railHeight)}px`;
-    el.logScrollbarThumb.style.transform = 'translateY(0)';
+    el.logScrollbarThumb.style.height = `${Math.max(MIN_LOG_SCROLL_THUMB_HEIGHT, railHeight)}px`;
+    el.logScrollbarThumb.style.transform = `translateY(${geometry.trackOffsetTop}px)`;
     return;
   }
 
   el.logScrollbar.classList.remove('disabled');
-  const thumbHeight = clampNumber((clientHeight / scrollHeight) * railHeight, 30, railHeight);
-  const top = (el.virtualScroll.scrollTop / scrollable) * Math.max(0, railHeight - thumbHeight);
+  const thumbHeight = clampNumber((clientHeight / scrollHeight) * railHeight, MIN_LOG_SCROLL_THUMB_HEIGHT, railHeight);
+  const safeScrollTop = clampNumber(el.virtualScroll.scrollTop, 0, scrollable);
+  const top = geometry.trackOffsetTop + (safeScrollTop / scrollable) * Math.max(0, railHeight - thumbHeight);
   el.logScrollbarThumb.style.height = `${thumbHeight}px`;
   el.logScrollbarThumb.style.transform = `translateY(${top}px)`;
 }
@@ -867,7 +925,7 @@ function handleRowClick(event) {
   const row = event.target.closest('.log-row');
   if (!row) return;
   const id = Number(row.dataset.id);
-  selectMessage(id, true);
+  selectMessage(id, false);
 }
 
 function selectMessage(id, ensureVisible) {
@@ -876,7 +934,9 @@ function selectMessage(id, ensureVisible) {
   if (ensureVisible) {
     scrollToMessage(id);
   }
-  renderAll();
+  renderVirtualRows();
+  renderDetail(getSelectedMessage());
+  updateChatRangeInfo();
 }
 
 function scrollToMessage(id) {
@@ -889,8 +949,13 @@ function scrollToMessage(id) {
     const currentScroll = el.virtualScroll.scrollTop;
     const rowTop = metrics.offsets[localIndex] || 0;
     const rowBottom = metrics.offsets[localIndex + 1] || rowTop + MIN_ROW_HEIGHT;
-    if (rowTop < currentScroll || rowBottom > currentScroll + viewportHeight) {
-      el.virtualScroll.scrollTop = Math.max(0, rowTop - MIN_ROW_HEIGHT * 4);
+    const visibleTop = currentScroll + MIN_ROW_HEIGHT;
+    const visibleBottom = currentScroll + viewportHeight - MIN_ROW_HEIGHT;
+    const maxScroll = Math.max(0, metrics.totalHeight + VIRTUAL_SCROLL_END_PADDING - viewportHeight);
+    if (rowTop < visibleTop) {
+      el.virtualScroll.scrollTop = clampNumber(rowTop - MIN_ROW_HEIGHT, 0, maxScroll);
+    } else if (rowBottom > visibleBottom) {
+      el.virtualScroll.scrollTop = clampNumber(rowBottom - viewportHeight + MIN_ROW_HEIGHT, 0, maxScroll);
     }
     return;
   }
@@ -2855,7 +2920,7 @@ function setupCanvas(canvas) {
 }
 
 function highlightSearch(value) {
-  const text = String(value || '');
+  const text = String(value ?? '');
   const query = el.searchInput.value.trim();
   if (!query) return escapeHtml(text);
   const escaped = escapeHtml(text);

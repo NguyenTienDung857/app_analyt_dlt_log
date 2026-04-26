@@ -6,6 +6,8 @@
   "type": "commonjs",
   "scripts": {
     "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder --win --x64",
     "check": "node scripts/smoke-check.js",
     "syntax": "node --check electron-main.js && node --check preload.js && node --check renderer.js && node --check src/parser/dltParser.js && node --check src/workers/parseWorker.js && node --check src/services/aiClient.js && node --check src/services/contextBuilder.js && node --check src/services/docReader.js && node --check src/services/ragStore.js && node --check src/services/exporter.js"
   },
@@ -18,7 +20,59 @@
   ],
   "author": "",
   "license": "UNLICENSED",
+  "build": {
+    "appId": "com.bltn.analysis-log",
+    "productName": "BLTN-Analysis Log",
+    "artifactName": "BLTN-Analysis-Log-Setup-${version}.${ext}",
+    "asar": false,
+    "files": [
+      "electron-main.js",
+      "preload.js",
+      "index.html",
+      "renderer.js",
+      "style.css",
+      "README.md",
+      "USER_GUIDE_EN.md",
+      "package.json",
+      "src/**/*",
+      "system_space.txt"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "signAndEditExecutable": false,
+      "verifyUpdateCodeSignature": false,
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "BLTN-Analysis Log"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "NguyenTienDung857",
+        "repo": "app_analyt_dlt_log"
+      }
+    ]
+  },
   "devDependencies": {
-    "electron": "^41.3.0"
+    "electron": "^41.3.0",
+    "electron-builder": "^26.8.1"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.3"
   }
 }

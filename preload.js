@@ -10,6 +10,11 @@ contextBridge.exposeInMainWorld('nexusApi', {
     ipcRenderer.on('logs:parse-event', listener);
     return () => ipcRenderer.removeListener('logs:parse-event', listener);
   },
+  onUpdateStatus: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('app:update-status', listener);
+    return () => ipcRenderer.removeListener('app:update-status', listener);
+  },
 
   saveExport: (payload) => ipcRenderer.invoke('export:save', payload),
   getReadme: () => ipcRenderer.invoke('app:read-readme'),

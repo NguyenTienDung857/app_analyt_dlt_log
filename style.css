@@ -1322,8 +1322,12 @@ textarea {
 
 .log-body {
   min-height: 0;
+  height: 100%;
+  max-height: 100%;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 8px 18px;
+  align-items: stretch;
+  overflow: hidden;
 }
 
 .workspace.log-ai-focus .log-body {
@@ -1404,9 +1408,12 @@ textarea {
 .virtual-scroll {
   min-height: 0;
   min-width: 0;
+  height: 100%;
+  max-height: 100%;
   overflow-y: scroll;
   overflow-x: hidden;
   position: relative;
+  align-self: stretch;
   font-family: var(--font-mono);
   font-size: 12px;
   scrollbar-color: rgba(57, 217, 138, 0.72) transparent;
@@ -1417,7 +1424,10 @@ textarea {
 .log-scrollbar {
   position: relative;
   height: 100%;
+  max-height: 100%;
   width: 8px;
+  align-self: stretch;
+  overflow: hidden;
   border-left: 1px solid rgba(57, 217, 138, 0.24);
   border-right: 0;
   background: transparent;
@@ -1624,6 +1634,8 @@ textarea {
   position: relative;
   width: 22px;
   height: 100%;
+  max-height: 100%;
+  align-self: stretch;
   border-left: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.035);
   cursor: pointer;
