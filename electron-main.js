@@ -191,6 +191,8 @@ function stopParseWorker() {
   }
 }
 
+app.setAppUserModelId('com.bltn.analysis-log');
+
 app.whenReady().then(async () => {
   await rebuildDefaultRag();
   createWindow();
