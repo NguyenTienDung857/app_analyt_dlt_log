@@ -109,6 +109,40 @@ class RagStore {
       }));
   }
 
+  searchSource(sourcePattern, query, limit = 3) {
+    const pattern = String(sourcePattern || '').toLowerCase();
+    if (!pattern || !this.chunks.length) return [];
+
+    const sourceChunks = this.chunks.filter((chunk) => {
+      return String(chunk.source || '').toLowerCase().includes(pattern) ||
+        String(chunk.sourcePath || '').toLowerCase().includes(pattern);
+    });
+    if (!sourceChunks.length) return [];
+
+    const queryTokens = tokenize(query);
+    if (!queryTokens.length) {
+      return sourceChunks.slice(0, limit).map((chunk) => chunkToResult(chunk, 0));
+    }
+
+    const queryTf = new Map();
+    for (const token of queryTokens) {
+      queryTf.set(token, (queryTf.get(token) || 0) + 1);
+    }
+
+    const scored = sourceChunks
+      .map((chunk) => ({
+        ...chunkToResult(chunk, cosineScore(queryTf, chunk.tf, this.documentFrequency, this.chunks.length))
+      }))
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score);
+
+    const fallback = scored.length ? scored : sourceChunks.slice(0, limit).map((chunk) => chunkToResult(chunk, 0));
+    return fallback.slice(0, limit).map((item) => ({
+      ...item,
+      score: Number(item.score.toFixed(4))
+    }));
+  }
+
   stats() {
     return {
       chunks: this.chunks.length,
@@ -116,6 +150,16 @@ class RagStore {
       terms: this.documentFrequency.size
     };
   }
+}
+
+function chunkToResult(chunk, score) {
+  return {
+    id: chunk.id,
+    score,
+    source: chunk.source,
+    sourcePath: chunk.sourcePath,
+    text: chunk.text
+  };
 }
 
 function expandPaths(pathsToIndex) {

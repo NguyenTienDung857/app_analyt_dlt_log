@@ -200,6 +200,17 @@
             <input id="ai-model" class="input" spellcheck="false">
             <label class="field-label">API Key</label>
             <input id="ai-key" class="input" type="password" placeholder="Leave blank to keep saved key">
+            <div class="config-subtitle">Row AI Button</div>
+            <label class="field-label">Row AI Base URL</label>
+            <input id="quick-ai-base-url" class="input" spellcheck="false">
+            <label class="field-label">Row AI Model</label>
+            <select id="quick-ai-model" class="select">
+              <option value="gpt-5.1-codex-mini">gpt-5.1-codex-mini</option>
+            </select>
+            <label class="field-label">Row AI API Key</label>
+            <input id="quick-ai-key" class="input" type="password" placeholder="Leave blank to keep saved key">
+            <label class="field-label">Row AI Prompt</label>
+            <textarea id="quick-ai-prompt" class="textarea small" spellcheck="false"></textarea>
             <label class="field-label">Extra headers JSON</label>
             <textarea id="ai-headers" class="textarea small" spellcheck="false">{}</textarea>
             <div class="inline-fields">
@@ -278,14 +289,7 @@
                 <button id="btn-ai-prompt" class="btn small ai-prompt-heading-btn">Prompt</button>
                 <select id="ai-runtime-model" class="select ai-model-select" title="AI model for this Send">
                   <option value="">Config Default</option>
-                  <option value="cx/gpt-5.5">Codex GPT-5.5</option>
-                  <option value="cx/gpt-5.4">Codex GPT-5.4</option>
-                  <option value="cx/gpt-5.4-mini">Codex GPT-5.4 Mini</option>
-                  <option value="gpt-5.5">OpenAI GPT-5.5</option>
-                  <option value="gpt-5.4">OpenAI GPT-5.4</option>
-                  <option value="gpt-5.4-mini">OpenAI GPT-5.4 Mini</option>
-                  <option value="gpt-5.4-nano">OpenAI GPT-5.4 Nano</option>
-                  <option value="gpt-5.2" selected>OpenAI GPT-5.2</option>
+                  <option value="gpt-5.5" selected>gpt-5.5</option>
                 </select>
               </div>
             </div>

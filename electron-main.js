@@ -11,6 +11,8 @@ const { writeExportFile } = require('./src/services/exporter');
 
 const APP_ROOT = __dirname;
 const UPDATE_CHECK_DELAY_MS = 5000;
+const DEFAULT_QUICK_AI_MODEL = 'gpt-5.1-codex-mini';
+const DEFAULT_QUICK_AI_PROMPT = 'Explain only the selected message. Use nearby messages only as context. Do not analyze the whole log unless the selected message requires it.';
 const DEFAULT_AI_CONFIG = {
   baseUrl: 'https://rsqd56n.9router.com/v1',
   model: 'cx/gpt-5.5',
@@ -18,7 +20,13 @@ const DEFAULT_AI_CONFIG = {
   headers: {},
   contextWindowMs: 500,
   maxLogLines: 1400,
-  autoScan: false
+  autoScan: false,
+  quickAi: {
+    baseUrl: '',
+    model: DEFAULT_QUICK_AI_MODEL,
+    apiKey: '',
+    prompt: DEFAULT_QUICK_AI_PROMPT
+  }
 };
 
 let mainWindow = null;
@@ -118,16 +126,24 @@ function readConfigInternal() {
 }
 
 function redactConfig(config) {
+  const quickAi = config.quickAi || {};
   return {
     ...config,
     apiKey: '',
     apiKeySet: Boolean(config.apiKey),
-    apiKeyPreview: config.apiKey ? `${config.apiKey.slice(0, 5)}...${config.apiKey.slice(-4)}` : ''
+    apiKeyPreview: config.apiKey ? `${config.apiKey.slice(0, 5)}...${config.apiKey.slice(-4)}` : '',
+    quickAi: {
+      ...quickAi,
+      apiKey: '',
+      apiKeySet: Boolean(quickAi.apiKey),
+      apiKeyPreview: quickAi.apiKey ? `${quickAi.apiKey.slice(0, 5)}...${quickAi.apiKey.slice(-4)}` : ''
+    }
   };
 }
 
 function saveConfig(input) {
   const current = readConfigInternal();
+  const quickInput = input.quickAi && typeof input.quickAi === 'object' ? input.quickAi : {};
   const next = {
     ...current,
     baseUrl: String(input.baseUrl || current.baseUrl).trim(),
@@ -135,13 +151,25 @@ function saveConfig(input) {
     headers: input.headers && typeof input.headers === 'object' ? input.headers : {},
     contextWindowMs: Number(input.contextWindowMs || current.contextWindowMs || 500),
     maxLogLines: Number(input.maxLogLines || current.maxLogLines || 1400),
-    autoScan: Boolean(input.autoScan)
+    autoScan: Boolean(input.autoScan),
+    quickAi: {
+      ...(current.quickAi || {}),
+      baseUrl: String(quickInput.baseUrl || current.quickAi?.baseUrl || current.baseUrl).trim(),
+      model: String(quickInput.model || current.quickAi?.model || DEFAULT_QUICK_AI_MODEL).trim(),
+      prompt: String(Object.prototype.hasOwnProperty.call(quickInput, 'prompt') ? quickInput.prompt : current.quickAi?.prompt || DEFAULT_QUICK_AI_PROMPT).trim() || DEFAULT_QUICK_AI_PROMPT
+    }
   };
 
   if (Object.prototype.hasOwnProperty.call(input, 'apiKey')) {
     const apiKey = String(input.apiKey || '').trim();
     if (apiKey) {
       next.apiKey = apiKey;
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(quickInput, 'apiKey')) {
+    const apiKey = String(quickInput.apiKey || '').trim();
+    if (apiKey) {
+      next.quickAi.apiKey = apiKey;
     }
   }
 
@@ -153,12 +181,64 @@ function saveConfig(input) {
 
 function normalizeAiConfig(config) {
   const next = { ...config };
-  const baseUrl = String(next.baseUrl || '');
-  const model = String(next.model || '').trim();
-  if (baseUrl.includes('9router.com') && model && !model.includes('/')) {
-    next.model = `cx/${model}`;
-  }
+  next.model = normalizeModelForBaseUrl(next.baseUrl, next.model);
+  next.quickAi = normalizeQuickAiConfig(next.quickAi, next);
   return next;
+}
+
+function normalizeQuickAiConfig(input, parent) {
+  const source = input && typeof input === 'object' ? input : {};
+  const baseUrl = String(source.baseUrl || parent.baseUrl || DEFAULT_AI_CONFIG.baseUrl).trim();
+  const model = normalizeModelForBaseUrl(baseUrl, source.model || DEFAULT_QUICK_AI_MODEL);
+  return {
+    baseUrl,
+    model,
+    apiKey: String(source.apiKey || '').trim(),
+    prompt: String(source.prompt || DEFAULT_QUICK_AI_PROMPT).trim() || DEFAULT_QUICK_AI_PROMPT
+  };
+}
+
+function normalizeModelForBaseUrl(baseUrl, model) {
+  const value = String(model || '').trim();
+  if (String(baseUrl || '').includes('9router.com') && value && !value.includes('/')) {
+    return `cx/${value}`;
+  }
+  return value;
+}
+
+function quickAiEffectiveConfig(config) {
+  const quickAi = config.quickAi || {};
+  const baseUrl = quickAi.baseUrl || config.baseUrl;
+  return {
+    ...config,
+    baseUrl,
+    model: normalizeModelForBaseUrl(baseUrl, quickAi.model || DEFAULT_QUICK_AI_MODEL),
+    apiKey: quickAi.apiKey || config.apiKey,
+    headers: config.headers || {}
+  };
+}
+
+function buildChatRagDocs(query, request) {
+  if (!ragStore) return [];
+  const regularDocs = ragStore.search(query, 8);
+  if (!request?.includeSystemSpaceDocs || typeof ragStore.searchSource !== 'function') {
+    return regularDocs;
+  }
+  const systemSpaceDocs = ragStore.searchSource('system_space', query, 4);
+  return mergeRagDocs(systemSpaceDocs, regularDocs, 10);
+}
+
+function mergeRagDocs(priorityDocs, regularDocs, limit) {
+  const docs = [];
+  const seen = new Set();
+  for (const doc of [...(priorityDocs || []), ...(regularDocs || [])]) {
+    const key = `${doc.sourcePath || doc.source || ''}:${doc.id ?? doc.text}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    docs.push(doc);
+    if (docs.length >= limit) break;
+  }
+  return docs;
 }
 
 function defaultDocumentPaths() {
@@ -322,6 +402,36 @@ ipcMain.handle('ai:save-config', async (_event, input) => {
   return redactConfig(saveConfig(input || {}));
 });
 
+ipcMain.handle('ai:list-models', async (_event, input) => {
+  const config = readConfigInternal();
+  const requested = input && typeof input === 'object' ? input : {};
+  const baseUrl = String(requested.baseUrl || config.baseUrl || '').trim();
+  const apiKey = String(requested.apiKey || config.apiKey || '').trim();
+  const headers = requested.headers && typeof requested.headers === 'object'
+    ? requested.headers
+    : config.headers || {};
+
+  if (!baseUrl || !apiKey) {
+    return { ok: false, error: 'AI config is missing base URL or API key.' };
+  }
+
+  try {
+    const models = await new AiClient({
+      ...config,
+      baseUrl,
+      apiKey,
+      headers
+    }).listModels();
+    return { ok: true, models };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error.message || 'Could not fetch AI models.',
+      statusCode: error.statusCode || null
+    };
+  }
+});
+
 ipcMain.handle('ai:analyze', async (_event, request) => {
   const config = readConfigInternal();
   if (!hasUsableAiConfig(config)) {
@@ -336,9 +446,11 @@ ipcMain.handle('ai:analyze', async (_event, request) => {
 
 ipcMain.handle('ai:chat', async (_event, request) => {
   const config = readConfigInternal();
+  const profile = String(request.profile || '').trim();
+  const baseConfig = profile === 'quick-row' ? quickAiEffectiveConfig(config) : config;
   const effectiveConfig = normalizeAiConfig({
-    ...config,
-    model: String(request.model || '').trim() || config.model
+    ...baseConfig,
+    model: String(request.model || '').trim() || baseConfig.model
   });
   if (!hasUsableAiConfig(effectiveConfig)) {
     return { ok: false, error: 'AI config is missing base URL, model, or API key.' };
@@ -348,7 +460,7 @@ ipcMain.handle('ai:chat', async (_event, request) => {
     request.question || '',
     ...(Array.isArray(request.messages) ? request.messages.slice(0, 80).map((message) => message.payload || '') : [])
   ].join(' ');
-  const ragDocs = ragStore ? ragStore.search(query, 8) : [];
+  const ragDocs = buildChatRagDocs(query, request);
   const payload = buildChatPayload(request, ragDocs, effectiveConfig);
   const result = await new AiClient(effectiveConfig).chat(payload);
   return { ok: true, result, ragDocs, promptStats: payload.promptStats };

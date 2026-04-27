@@ -10,7 +10,9 @@ const VIRTUAL_SCROLL_END_PADDING = MIN_ROW_HEIGHT * 2;
 const ESTIMATED_MONO_CHAR_WIDTH = 7.8;
 const DEFAULT_LOG_COLUMNS = [66, 108, 76, 640];
 const MIN_LOG_COLUMNS = [42, 72, 52, 180];
-const DEFAULT_RUNTIME_MODEL = 'gpt-5.2';
+const DEFAULT_RUNTIME_MODEL = 'gpt-5.5';
+const DEFAULT_QUICK_AI_MODEL = 'gpt-5.1-codex-mini';
+const DEFAULT_QUICK_AI_PROMPT = 'Explain only the selected message. Use nearby messages only as context. Do not analyze the whole log unless the selected message requires it.';
 
 const state = {
   messages: [],
@@ -29,6 +31,7 @@ const state = {
   aiConfigUnlocked: false,
   aiChatMode: 'selection',
   aiSending: false,
+  quickAiPendingId: null,
   naturalSearching: false,
   aiGuidance: loadTextSetting('bltn-ai-guidance'),
   aiRange: {
@@ -135,6 +138,10 @@ const el = {
   aiBaseUrl: document.getElementById('ai-base-url'),
   aiModel: document.getElementById('ai-model'),
   aiKey: document.getElementById('ai-key'),
+  quickAiBaseUrl: document.getElementById('quick-ai-base-url'),
+  quickAiModel: document.getElementById('quick-ai-model'),
+  quickAiKey: document.getElementById('quick-ai-key'),
+  quickAiPrompt: document.getElementById('quick-ai-prompt'),
   aiHeaders: document.getElementById('ai-headers'),
   aiAutoScan: document.getElementById('ai-auto-scan'),
   aiWindow: document.getElementById('ai-window'),
@@ -311,6 +318,12 @@ function wireEvents() {
     }
   });
   el.btnSaveAi.addEventListener('click', saveAiConfig);
+  if (api.listAiModels) {
+    el.aiBaseUrl.addEventListener('change', () => refreshAiModelOptions({ runtimeModel: DEFAULT_RUNTIME_MODEL }));
+    el.aiKey.addEventListener('change', () => refreshAiModelOptions({ runtimeModel: el.aiRuntimeModel.value || DEFAULT_RUNTIME_MODEL }));
+    el.quickAiBaseUrl.addEventListener('change', () => refreshAiModelOptions({ quickModel: DEFAULT_QUICK_AI_MODEL }));
+    el.quickAiKey.addEventListener('change', () => refreshAiModelOptions({ quickModel: el.quickAiModel.value || DEFAULT_QUICK_AI_MODEL }));
+  }
   el.btnNatural.addEventListener('click', runNaturalSearch);
 
   el.virtualScroll.addEventListener('scroll', handleVirtualScroll);
@@ -948,12 +961,16 @@ function scheduleVirtualRows() {
 function renderRow(message, localIndex, rowHeight) {
   const selected = state.selectedId === message.id;
   const aiHit = state.aiHighlights.has(message.id);
+  const quickPending = state.quickAiPendingId === message.id;
+  const quickDisabled = state.aiSending ? 'disabled' : '';
+  const quickLabel = quickPending ? '...' : 'AI';
   return `
-    <div class="log-row log-grid ${selected ? 'selected' : ''} ${aiHit ? 'ai-hit' : ''}" data-id="${message.id}" data-local-index="${localIndex}" style="height:${rowHeight}px">
+    <div class="log-row log-grid ${selected ? 'selected' : ''} ${aiHit ? 'ai-hit' : ''} ${quickPending ? 'quick-ai-pending' : ''}" data-id="${message.id}" data-local-index="${localIndex}" style="height:${rowHeight}px">
       <div>${highlightSearch(message.id)}</div>
       <div title="${escapeHtml(message.time)}">${highlightSearch(formatLogTime(message))}</div>
       <div>${highlightSearch(formatDelta(message.deltaMs))}</div>
       <div class="payload-cell" title="${escapeHtml(message.payload || '')}">${highlightSearch(message.payload || '')}</div>
+      <button type="button" class="quick-ai-row-btn" data-id="${message.id}" ${quickDisabled} title="Explain this message with AI">${quickLabel}</button>
     </div>
   `;
 }
@@ -1059,6 +1076,14 @@ function saveLogColumnWidths() {
 }
 
 function handleRowClick(event) {
+  const quickAiButton = event.target.closest('.quick-ai-row-btn');
+  if (quickAiButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    runQuickRowAi(Number(quickAiButton.dataset.id));
+    return;
+  }
+
   const row = event.target.closest('.log-row');
   if (!row) return;
   const id = Number(row.dataset.id);
@@ -1250,18 +1275,216 @@ async function loadAiConfig() {
   state.aiConfig = await api.getAiConfig();
   el.aiBaseUrl.value = state.aiConfig.baseUrl || '';
   el.aiModel.value = state.aiConfig.model || '';
-  setRuntimeModelSelection();
+  const quickAi = state.aiConfig.quickAi || {};
+  el.quickAiBaseUrl.value = quickAi.baseUrl || state.aiConfig.baseUrl || '';
+  el.quickAiPrompt.value = quickAi.prompt || DEFAULT_QUICK_AI_PROMPT;
   el.aiHeaders.value = JSON.stringify(state.aiConfig.headers || {}, null, 2);
   el.aiAutoScan.checked = Boolean(state.aiConfig.autoScan);
   el.aiWindow.value = state.aiConfig.contextWindowMs || 500;
   el.aiKey.placeholder = state.aiConfig.apiKeySet ? `Saved ${state.aiConfig.apiKeyPreview}` : 'Paste API key';
+  el.quickAiKey.placeholder = quickAi.apiKeySet
+    ? `Saved ${quickAi.apiKeyPreview}`
+    : (state.aiConfig.apiKeySet ? 'Uses main AI key' : 'Paste API key');
+  await refreshAiModelOptions({
+    runtimeModel: DEFAULT_RUNTIME_MODEL,
+    quickModel: quickAi.model || DEFAULT_QUICK_AI_MODEL
+  });
 }
 
 function setRuntimeModelSelection(model) {
   if (!el.aiRuntimeModel) return;
-  const value = String(model || DEFAULT_RUNTIME_MODEL).trim();
-  const hasOption = Array.from(el.aiRuntimeModel.options).some((option) => option.value === value);
-  el.aiRuntimeModel.value = hasOption ? value : DEFAULT_RUNTIME_MODEL;
+  const baseUrl = el.aiBaseUrl?.value || state.aiConfig?.baseUrl || '';
+  el.aiRuntimeModel.value = resolveRuntimeModelSelection(el.aiRuntimeModel, model, baseUrl);
+}
+
+function setQuickAiModelSelection(model) {
+  if (!el.quickAiModel) return;
+  const baseUrl = el.quickAiBaseUrl?.value || state.aiConfig?.quickAi?.baseUrl || state.aiConfig?.baseUrl || '';
+  el.quickAiModel.value = resolveQuickModelSelection(el.quickAiModel, model, baseUrl);
+}
+
+async function refreshAiModelOptions(selection = {}) {
+  const runtimeSelection = selection.runtimeModel || el.aiRuntimeModel?.value || DEFAULT_RUNTIME_MODEL;
+  const quickSelection = selection.quickModel || el.quickAiModel?.value || state.aiConfig?.quickAi?.model || DEFAULT_QUICK_AI_MODEL;
+  const headers = readAiHeadersForLookup();
+  const mainBaseUrl = el.aiBaseUrl?.value || state.aiConfig?.baseUrl || '';
+  const quickBaseUrl = el.quickAiBaseUrl?.value || state.aiConfig?.quickAi?.baseUrl || mainBaseUrl;
+
+  const [runtimeModels, quickModels] = await Promise.all([
+    fetchAiModelOptions(mainBaseUrl, el.aiKey?.value || '', headers, [runtimeSelection, DEFAULT_RUNTIME_MODEL]),
+    fetchAiModelOptions(quickBaseUrl, el.quickAiKey?.value || '', headers, [quickSelection, DEFAULT_QUICK_AI_MODEL])
+  ]);
+
+  setModelSelectOptions(el.aiRuntimeModel, runtimeModels, { includeConfigDefault: true });
+  setModelSelectOptions(el.quickAiModel, quickModels);
+  setRuntimeModelSelection(runtimeSelection);
+  setQuickAiModelSelection(quickSelection);
+}
+
+async function fetchAiModelOptions(baseUrl, apiKey, headers, fallbackModels = []) {
+  const fallback = fallbackModelOptions(baseUrl, fallbackModels);
+  if (!api.listAiModels || !String(baseUrl || '').trim()) {
+    return fallback;
+  }
+
+  try {
+    const response = await api.listAiModels({ baseUrl, apiKey, headers });
+    if (response.ok && Array.isArray(response.models) && response.models.length) {
+      return normalizeUiModelOptions(response.models);
+    }
+  } catch (_error) {
+    // Fallback keeps the UI usable when a provider does not expose /models.
+  }
+  return fallback;
+}
+
+function setModelSelectOptions(select, models, options = {}) {
+  if (!select) return;
+  const fragment = document.createDocumentFragment();
+  if (options.includeConfigDefault) {
+    fragment.appendChild(new Option('Config Default', ''));
+  }
+  for (const model of normalizeUiModelOptions(models)) {
+    const label = model.label && model.label !== model.id
+      ? `${model.label} (${model.id})`
+      : model.id;
+    fragment.appendChild(new Option(label, model.id));
+  }
+  select.replaceChildren(fragment);
+}
+
+function fallbackModelOptions(baseUrl, preferredModels = []) {
+  const isRouter = String(baseUrl || '').includes('9router.com');
+  const ids = isRouter
+    ? ['cx/gpt-5.5', 'cx/gpt-5.4', 'cx/gpt-5.2', 'cx/gpt-5.1-codex-mini', 'cx/gpt-5-codex-mini']
+    : ['gpt-5.5', 'gpt-5.4', 'gpt-5.2', 'gpt-5.1-codex-mini', 'gpt-5-codex-mini'];
+  const preferred = preferredModels
+    .map((model) => normalizeUiModelForBaseUrl(baseUrl, model))
+    .filter(Boolean);
+  return normalizeUiModelOptions([...preferred, ...ids]);
+}
+
+function normalizeUiModelOptions(models) {
+  const normalized = [];
+  const seen = new Set();
+  for (const item of models || []) {
+    const id = typeof item === 'string'
+      ? item
+      : item?.id || item?.model || item?.name || item?.value;
+    const value = String(id || '').trim();
+    if (!value) continue;
+
+    const key = value.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const label = typeof item === 'string'
+      ? value
+      : String(item?.label || item?.display_name || item?.name || value).trim() || value;
+    normalized.push({ id: value, label });
+  }
+  return normalized;
+}
+
+function resolveRuntimeModelSelection(select, model, baseUrl) {
+  const values = Array.from(select.options || []).map((option) => option.value);
+  const candidates = [
+    ...modelValueCandidates(model, baseUrl),
+    ...modelValueCandidates(DEFAULT_RUNTIME_MODEL, baseUrl)
+  ];
+
+  for (const candidate of candidates) {
+    if (values.includes(candidate)) return candidate;
+  }
+
+  return strongestModelValue(values) || values.find((value) => value) || '';
+}
+
+function resolveQuickModelSelection(select, model, baseUrl) {
+  const values = Array.from(select.options || []).map((option) => option.value);
+  const candidates = [
+    ...modelValueCandidates(model, baseUrl),
+    ...modelValueCandidates(DEFAULT_QUICK_AI_MODEL, baseUrl)
+  ];
+
+  for (const candidate of candidates) {
+    if (values.includes(candidate)) return candidate;
+  }
+
+  return latestMiniModelValue(values) || strongestModelValue(values) || values.find((value) => value) || '';
+}
+
+function modelValueCandidates(model, baseUrl) {
+  const value = String(model || '').trim();
+  if (!value) return [];
+  const leaf = modelLeaf(value);
+  const candidates = [
+    value,
+    normalizeUiModelForBaseUrl(baseUrl, value),
+    leaf
+  ];
+  if (String(baseUrl || '').includes('9router.com')) {
+    candidates.push(`cx/${leaf}`);
+  }
+  return Array.from(new Set(candidates.filter(Boolean)));
+}
+
+function modelLeaf(model) {
+  const value = String(model || '').trim();
+  return value.includes('/') ? value.split('/').pop() : value;
+}
+
+function strongestModelValue(values) {
+  return values
+    .filter(Boolean)
+    .slice()
+    .sort((a, b) => modelStrengthScore(b) - modelStrengthScore(a))[0] || '';
+}
+
+function latestMiniModelValue(values) {
+  const exactMini = values.filter((value) => /(^|[-/])mini$/i.test(modelLeaf(value)));
+  const miniModels = exactMini.length
+    ? exactMini
+    : values.filter((value) => /(^|[-/])mini($|-)/i.test(modelLeaf(value)));
+  return miniModels
+    .filter(Boolean)
+    .slice()
+    .sort((a, b) => modelVersionScore(b) - modelVersionScore(a) || modelStrengthScore(b) - modelStrengthScore(a))[0] || '';
+}
+
+function modelStrengthScore(model) {
+  const leaf = modelLeaf(model).toLowerCase();
+  let score = modelVersionScore(leaf) * 100;
+  if (leaf.includes('nano')) score -= 40;
+  if (leaf.includes('mini')) score -= 25;
+  if (leaf.includes('low')) score -= 10;
+  if (leaf.includes('none')) score -= 8;
+  if (leaf.includes('high')) score += 8;
+  if (leaf.includes('xhigh') || leaf.includes('max')) score += 12;
+  return score;
+}
+
+function modelVersionScore(model) {
+  const match = String(model || '').match(/gpt-(\d+(?:\.\d+)?)/i);
+  if (!match) return 0;
+  const [major, minor = '0'] = match[1].split('.');
+  return Number(major || 0) * 100 + Number(minor || 0);
+}
+
+function normalizeUiModelForBaseUrl(baseUrl, model) {
+  const value = String(model || '').trim();
+  if (String(baseUrl || '').includes('9router.com') && value && !value.includes('/')) {
+    return `cx/${value}`;
+  }
+  return value;
+}
+
+function readAiHeadersForLookup() {
+  try {
+    const parsed = JSON.parse(el.aiHeaders?.value || '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch (_error) {
+    return state.aiConfig?.headers || {};
+  }
 }
 
 async function saveAiConfig() {
@@ -1273,18 +1496,35 @@ async function saveAiConfig() {
     return;
   }
 
+  const runtimeModel = el.aiRuntimeModel?.value || DEFAULT_RUNTIME_MODEL;
   state.aiConfig = await api.saveAiConfig({
     baseUrl: el.aiBaseUrl.value,
     model: el.aiModel.value,
     apiKey: el.aiKey.value,
+    quickAi: {
+      baseUrl: el.quickAiBaseUrl.value,
+      model: el.quickAiModel.value,
+      apiKey: el.quickAiKey.value,
+      prompt: el.quickAiPrompt.value
+    },
     headers,
     autoScan: el.aiAutoScan.checked,
     contextWindowMs: Number(el.aiWindow.value || 500),
     maxLogLines: 1400
   });
   el.aiKey.value = '';
+  el.quickAiKey.value = '';
   el.aiKey.placeholder = state.aiConfig.apiKeySet ? `Saved ${state.aiConfig.apiKeyPreview}` : 'Paste API key';
-  setRuntimeModelSelection();
+  const quickAi = state.aiConfig.quickAi || {};
+  el.quickAiKey.placeholder = quickAi.apiKeySet
+    ? `Saved ${quickAi.apiKeyPreview}`
+    : (state.aiConfig.apiKeySet ? 'Uses main AI key' : 'Paste API key');
+  el.quickAiPrompt.value = quickAi.prompt || DEFAULT_QUICK_AI_PROMPT;
+  el.quickAiBaseUrl.value = quickAi.baseUrl || state.aiConfig.baseUrl || '';
+  await refreshAiModelOptions({
+    runtimeModel,
+    quickModel: quickAi.model || DEFAULT_QUICK_AI_MODEL
+  });
   setAiStatus('AI config saved.', false);
 }
 
@@ -1461,7 +1701,10 @@ async function sendAiChat(mode) {
     setAiStatus('No log context is available. Open a log file first.', true);
     return;
   }
-  const contextMessages = rawContextMessages.map(toAiMessage);
+  const selectedContextId = mode === 'selection' ? state.selectedId : null;
+  const contextMessages = rawContextMessages.map((message) => (
+    selectedContextId !== null ? toCurrentLineAiMessage(message, selectedContextId) : toAiMessage(message)
+  ));
   const aiQuestion = withHiddenAiInstructions(question, mode);
   const maxLogLines = getAiChatMaxLogLines(mode, contextMessages.length);
   const estimatedContextMessages = Math.min(contextMessages.length, maxLogLines);
@@ -1478,6 +1721,8 @@ async function sendAiChat(mode) {
       mode,
       model: el.aiRuntimeModel.value || '',
       messages: contextMessages,
+      includeSystemSpaceDocs: mode === 'selection',
+      selectedIds: selectedContextId !== null ? [selectedContextId] : [],
       stats: collectAiStats(mode, rawContextMessages),
       maxLogLines
     });
@@ -1505,6 +1750,106 @@ async function sendAiChat(mode) {
   } finally {
     setAiSending(false);
   }
+}
+
+async function runQuickRowAi(messageId) {
+  if (state.aiSending) return;
+  const target = state.messages.find((message) => message.id === messageId);
+  if (!target) return;
+
+  selectMessage(target.id, false);
+  const rawContextMessages = buildQuickAiContextMessages(target);
+  if (!rawContextMessages.length) {
+    setAiStatus('No nearby log context is available for this message.', true);
+    return;
+  }
+
+  const contextMessages = rawContextMessages.map((message) => toQuickAiMessage(message, target.id));
+  const prompt = getQuickAiPrompt();
+  const question = buildQuickAiQuestion(target, prompt);
+  const maxLogLines = contextMessages.length;
+
+  appendChatBubble('user', `Explain message #${target.id}\n${String(target.payload || '').slice(0, 260)}`, contextMessages.length);
+  const pendingBubble = appendChatBubble('assistant', `AI is explaining message #${target.id}...`, contextMessages.length);
+
+  state.quickAiPendingId = target.id;
+  setAiSending(true);
+  setAiStatus(`AI is explaining message #${target.id} with nearby context...`, false);
+
+  try {
+    const response = await api.chatWithAi({
+      profile: 'quick-row',
+      question,
+      mode: 'quick-row',
+      model: el.quickAiModel?.value || '',
+      messages: contextMessages,
+      includeSystemSpaceDocs: true,
+      selectedIds: [target.id],
+      stats: collectAiStats('quick-row', rawContextMessages),
+      maxLogLines
+    });
+    if (!response.ok) {
+      updateChatBubble(pendingBubble, 'assistant', `AI error: ${response.error || 'AI call failed.'}`);
+      setAiStatus(response.error || 'Quick row AI failed.', true);
+      return;
+    }
+
+    const resultText = String(response.result || '').trim();
+    if (!resultText) {
+      throw new Error('AI returned an empty response.');
+    }
+
+    const responseMeta = {
+      contextMessages: response.promptStats?.contextMessages || contextMessages.length,
+      docs: response.promptStats?.docs || 0,
+      docSources: response.promptStats?.docSources || 0
+    };
+    updateChatBubble(pendingBubble, 'assistant', resultText, responseMeta.contextMessages, responseMeta.docs, responseMeta.docSources);
+    setAiStatus(`AI explained message #${target.id}. Sent ${formatNumber(responseMeta.contextMessages)} nearby messages and ${formatAiDocUsage(responseMeta)}.`, false);
+  } catch (error) {
+    updateChatBubble(pendingBubble, 'assistant', `AI error: ${error.message}`);
+    setAiStatus(`Quick row AI error: ${error.message}`, true);
+  } finally {
+    state.quickAiPendingId = null;
+    setAiSending(false);
+  }
+}
+
+function buildQuickAiContextMessages(target) {
+  return buildNeighborContextByIndex(target.id, 8, 8);
+}
+
+function getQuickAiPrompt() {
+  return String(el.quickAiPrompt?.value || state.aiConfig?.quickAi?.prompt || DEFAULT_QUICK_AI_PROMPT).trim() || DEFAULT_QUICK_AI_PROMPT;
+}
+
+function buildQuickAiQuestion(target, prompt) {
+  return [
+    prompt || DEFAULT_QUICK_AI_PROMPT,
+    '',
+    `Target message id: ${target.id}`,
+    `Target time: ${formatAiClockTime(target)}`,
+    `Target level/type: ${target.level || '-'} / ${target.type || '-'}`,
+    `Target ECU/APID/CTID: ${target.ecu || '-'} / ${target.apid || '-'} / ${target.ctid || '-'}`,
+    `Target payload: ${target.payload || ''}`,
+    '',
+    'Nearby context is attached below. The selected row is marked with [TARGET]. Messages before and after it are only supporting context.',
+    'Answer directly and keep the scope on the selected message.'
+  ].join('\n');
+}
+
+function toQuickAiMessage(message, targetId) {
+  const relation = message.id === targetId ? '[TARGET]' : (message.id < targetId ? '[BEFORE]' : '[AFTER]');
+  const meta = [
+    relation,
+    `#${message.id}`,
+    message.level || '',
+    [message.ecu, message.apid, message.ctid].filter(Boolean).join('/')
+  ].filter(Boolean).join(' ');
+  return {
+    time: formatAiClockTime(message),
+    payload: `${meta} ${message.payload || ''}`.trim()
+  };
 }
 
 function getAiChatMaxLogLines(mode, contextCount) {
@@ -1577,7 +1922,7 @@ function buildChatContextMessages(mode) {
   if (mode === 'selection') {
     const selected = getSelectedMessage();
     if (selected) {
-      return buildLocalContext(selected.timeMs, selected.timeMs, Math.max(2000, Number(el.aiWindow.value || 500)), 900);
+      return buildCurrentLineContext(selected);
     }
   }
 
@@ -1590,6 +1935,32 @@ function buildChatContextMessages(mode) {
   }
 
   return state.messages.slice(0, Math.min(1200, state.messages.length));
+}
+
+function buildCurrentLineContext(selected) {
+  const neighborContext = buildNeighborContextByIndex(selected.id, 12, 12);
+  const timeContext = Number.isFinite(selected.timeMs)
+    ? buildLocalContext(selected.timeMs, selected.timeMs, Math.max(2000, Number(el.aiWindow.value || 500)), 860)
+    : [];
+  return mergeMessageContext(neighborContext, timeContext, 900);
+}
+
+function buildNeighborContextByIndex(targetId, beforeCount, afterCount) {
+  const targetIndex = state.messages.findIndex((message) => message.id === targetId);
+  if (targetIndex < 0) return [];
+  const start = Math.max(0, targetIndex - beforeCount);
+  const end = Math.min(state.messages.length, targetIndex + afterCount + 1);
+  return state.messages.slice(start, end);
+}
+
+function mergeMessageContext(primary, secondary, limit) {
+  const selected = new Map();
+  for (const message of [...(primary || []), ...(secondary || [])]) {
+    if (message && Number.isFinite(Number(message.id))) {
+      selected.set(message.id, message);
+    }
+  }
+  return Array.from(selected.values()).sort((a, b) => a.id - b.id).slice(0, limit);
 }
 
 function buildFilteredContextMessages(limit) {
@@ -2094,6 +2465,20 @@ function toAiMessage(message) {
   };
 }
 
+function toCurrentLineAiMessage(message, selectedId) {
+  const relation = message.id === selectedId ? '[CURRENT LINE]' : (message.id < selectedId ? '[BEFORE]' : '[AFTER]');
+  const meta = [
+    relation,
+    `#${message.id}`,
+    message.level || '',
+    [message.ecu, message.apid, message.ctid].filter(Boolean).join('/')
+  ].filter(Boolean).join(' ');
+  return {
+    time: formatAiClockTime(message),
+    payload: `${meta} ${message.payload || ''}`.trim()
+  };
+}
+
 function formatAiClockTime(message) {
   const raw = String(message?.time || '');
   const match = raw.match(/\b\d{2}:\d{2}:\d{2}(?:\.\d+)?\b/);
@@ -2140,6 +2525,7 @@ function setAiSending(isSending) {
   el.aiChatModeSelect.disabled = isSending;
   el.aiRuntimeModel.disabled = isSending;
   el.btnAiChatSend.textContent = isSending ? 'Waiting...' : 'Send';
+  scheduleVirtualRows();
 }
 
 async function runAiAnalysis(payload) {
@@ -3015,6 +3401,7 @@ function clearData() {
   state.currentPage = 1;
   state.parseDone = false;
   state.aiChatMode = 'selection';
+  state.quickAiPendingId = null;
   state.aiRange = {
     unit: 'time',
     min: null,

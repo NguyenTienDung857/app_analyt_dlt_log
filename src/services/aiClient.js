@@ -250,6 +250,16 @@ class AiClient {
     const parsed = parseJsonContent(content);
     return parsed;
   }
+
+  async listModels() {
+    const url = joinUrl(this.config.baseUrl, '/models');
+    const headers = {
+      Authorization: `Bearer ${this.config.apiKey}`,
+      ...(this.config.headers || {})
+    };
+    const response = await getJson(url, headers, { timeoutMs: 60000 });
+    return normalizeModelResponse(response);
+  }
 }
 
 function hasUsableAiConfig(config) {
@@ -309,6 +319,90 @@ function postJson(urlString, payload, headers) {
     request.write(body);
     request.end();
   });
+}
+
+function getJson(urlString, headers, options = {}) {
+  const url = new URL(urlString);
+  const transport = url.protocol === 'http:' ? http : https;
+  const timeoutMs = Number(options.timeoutMs || 60000);
+
+  return new Promise((resolve, reject) => {
+    const request = transport.request(
+      {
+        method: 'GET',
+        hostname: url.hostname,
+        port: url.port || undefined,
+        path: `${url.pathname}${url.search}`,
+        headers,
+        timeout: timeoutMs
+      },
+      (response) => {
+        const chunks = [];
+        response.on('data', (chunk) => chunks.push(chunk));
+        response.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8');
+          let json = null;
+          try {
+            json = text ? JSON.parse(text) : {};
+          } catch (_error) {
+            json = { raw: text };
+          }
+
+          if (response.statusCode < 200 || response.statusCode >= 300) {
+            const error = new Error(json.error?.message || json.message || text || `HTTP ${response.statusCode}`);
+            error.statusCode = response.statusCode;
+            error.body = json;
+            reject(error);
+            return;
+          }
+          resolve(json);
+        });
+      }
+    );
+
+    request.on('timeout', () => {
+      request.destroy(new Error(`AI model list request timed out after ${Math.round(timeoutMs / 1000)} seconds.`));
+    });
+    request.on('error', reject);
+    request.end();
+  });
+}
+
+function normalizeModelResponse(response) {
+  const source = Array.isArray(response)
+    ? response
+    : Array.isArray(response?.data)
+      ? response.data
+      : Array.isArray(response?.models)
+        ? response.models
+        : [];
+  const models = [];
+  const seen = new Set();
+
+  for (const item of source) {
+    const id = typeof item === 'string'
+      ? item
+      : item?.id || item?.model || item?.name || item?.slug;
+    const value = String(id || '').trim();
+    if (!value) continue;
+
+    const key = value.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    models.push({
+      id: value,
+      label: modelLabel(item, value)
+    });
+  }
+
+  return models;
+}
+
+function modelLabel(item, fallback) {
+  if (item && typeof item === 'object') {
+    return String(item.display_name || item.label || item.name || fallback).trim() || fallback;
+  }
+  return fallback;
 }
 
 function extractContent(response) {

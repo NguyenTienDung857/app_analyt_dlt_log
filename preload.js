@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('nexusApi', {
 
   getAiConfig: () => ipcRenderer.invoke('ai:get-config'),
   saveAiConfig: (config) => ipcRenderer.invoke('ai:save-config', config),
+  listAiModels: (config) => ipcRenderer.invoke('ai:list-models', config),
   analyzeWithAi: (payload) => ipcRenderer.invoke('ai:analyze', payload),
   chatWithAi: (payload) => ipcRenderer.invoke('ai:chat', payload),
   naturalSearch: (payload) => ipcRenderer.invoke('ai:natural-search', payload),
