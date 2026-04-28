@@ -11,7 +11,13 @@ const ESTIMATED_MONO_CHAR_WIDTH = 7.8;
 const DEFAULT_LOG_COLUMNS = [66, 108, 76, 640];
 const MIN_LOG_COLUMNS = [42, 72, 52, 180];
 const DEFAULT_RUNTIME_MODEL = 'gpt-5.5';
-const DEFAULT_QUICK_AI_MODEL = 'gpt-5.1-codex-mini';
+const DEFAULT_QUICK_AI_MODEL = DEFAULT_RUNTIME_MODEL;
+const LEGACY_QUICK_AI_MODELS = new Set([
+  'gpt-5.1-codex-mini',
+  'cx/gpt-5.1-codex-mini',
+  'gpt-5-codex-mini',
+  'cx/gpt-5-codex-mini'
+]);
 const DEFAULT_QUICK_AI_PROMPT = 'Explain only the selected message. Use nearby messages only as context. Do not analyze the whole log unless the selected message requires it.';
 
 const state = {
@@ -1402,7 +1408,7 @@ function resolveRuntimeModelSelection(select, model, baseUrl) {
 function resolveQuickModelSelection(select, model, baseUrl) {
   const values = Array.from(select.options || []).map((option) => option.value);
   const candidates = [
-    ...modelValueCandidates(model, baseUrl),
+    ...(isLegacyQuickAiModel(model) ? [] : modelValueCandidates(model, baseUrl)),
     ...modelValueCandidates(DEFAULT_QUICK_AI_MODEL, baseUrl)
   ];
 
@@ -1410,7 +1416,7 @@ function resolveQuickModelSelection(select, model, baseUrl) {
     if (values.includes(candidate)) return candidate;
   }
 
-  return latestMiniModelValue(values) || strongestModelValue(values) || values.find((value) => value) || '';
+  return strongestModelValue(values) || values.find((value) => value) || '';
 }
 
 function modelValueCandidates(model, baseUrl) {
@@ -1433,22 +1439,17 @@ function modelLeaf(model) {
   return value.includes('/') ? value.split('/').pop() : value;
 }
 
+function isLegacyQuickAiModel(model) {
+  const value = String(model || '').trim().toLowerCase();
+  const leaf = modelLeaf(value);
+  return LEGACY_QUICK_AI_MODELS.has(value) || LEGACY_QUICK_AI_MODELS.has(leaf);
+}
+
 function strongestModelValue(values) {
   return values
     .filter(Boolean)
     .slice()
     .sort((a, b) => modelStrengthScore(b) - modelStrengthScore(a))[0] || '';
-}
-
-function latestMiniModelValue(values) {
-  const exactMini = values.filter((value) => /(^|[-/])mini$/i.test(modelLeaf(value)));
-  const miniModels = exactMini.length
-    ? exactMini
-    : values.filter((value) => /(^|[-/])mini($|-)/i.test(modelLeaf(value)));
-  return miniModels
-    .filter(Boolean)
-    .slice()
-    .sort((a, b) => modelVersionScore(b) - modelVersionScore(a) || modelStrengthScore(b) - modelStrengthScore(a))[0] || '';
 }
 
 function modelStrengthScore(model) {

@@ -11,7 +11,14 @@ const { writeExportFile } = require('./src/services/exporter');
 
 const APP_ROOT = __dirname;
 const UPDATE_CHECK_DELAY_MS = 5000;
-const DEFAULT_QUICK_AI_MODEL = 'gpt-5.1-codex-mini';
+const DEFAULT_STRONG_AI_MODEL = 'gpt-5.5';
+const DEFAULT_QUICK_AI_MODEL = DEFAULT_STRONG_AI_MODEL;
+const LEGACY_QUICK_AI_MODELS = new Set([
+  'gpt-5.1-codex-mini',
+  'cx/gpt-5.1-codex-mini',
+  'gpt-5-codex-mini',
+  'cx/gpt-5-codex-mini'
+]);
 const DEFAULT_QUICK_AI_PROMPT = 'Explain only the selected message. Use nearby messages only as context. Do not analyze the whole log unless the selected message requires it.';
 const DEFAULT_AI_CONFIG = {
   baseUrl: 'https://rsqd56n.9router.com/v1',
@@ -189,13 +196,27 @@ function normalizeAiConfig(config) {
 function normalizeQuickAiConfig(input, parent) {
   const source = input && typeof input === 'object' ? input : {};
   const baseUrl = String(source.baseUrl || parent.baseUrl || DEFAULT_AI_CONFIG.baseUrl).trim();
-  const model = normalizeModelForBaseUrl(baseUrl, source.model || DEFAULT_QUICK_AI_MODEL);
+  const model = normalizeQuickAiModelForBaseUrl(baseUrl, source.model);
   return {
     baseUrl,
     model,
     apiKey: String(source.apiKey || '').trim(),
     prompt: String(source.prompt || DEFAULT_QUICK_AI_PROMPT).trim() || DEFAULT_QUICK_AI_PROMPT
   };
+}
+
+function normalizeQuickAiModelForBaseUrl(baseUrl, model) {
+  const value = String(model || '').trim();
+  if (!value || isLegacyQuickAiModel(value)) {
+    return normalizeModelForBaseUrl(baseUrl, DEFAULT_QUICK_AI_MODEL);
+  }
+  return normalizeModelForBaseUrl(baseUrl, value);
+}
+
+function isLegacyQuickAiModel(model) {
+  const value = String(model || '').trim().toLowerCase();
+  const leaf = value.includes('/') ? value.split('/').pop() : value;
+  return LEGACY_QUICK_AI_MODELS.has(value) || LEGACY_QUICK_AI_MODELS.has(leaf);
 }
 
 function normalizeModelForBaseUrl(baseUrl, model) {
@@ -212,7 +233,7 @@ function quickAiEffectiveConfig(config) {
   return {
     ...config,
     baseUrl,
-    model: normalizeModelForBaseUrl(baseUrl, quickAi.model || DEFAULT_QUICK_AI_MODEL),
+    model: normalizeQuickAiModelForBaseUrl(baseUrl, quickAi.model),
     apiKey: quickAi.apiKey || config.apiKey,
     headers: config.headers || {}
   };
@@ -448,9 +469,13 @@ ipcMain.handle('ai:chat', async (_event, request) => {
   const config = readConfigInternal();
   const profile = String(request.profile || '').trim();
   const baseConfig = profile === 'quick-row' ? quickAiEffectiveConfig(config) : config;
+  const requestedModel = String(request.model || '').trim();
+  const model = profile === 'quick-row'
+    ? normalizeQuickAiModelForBaseUrl(baseConfig.baseUrl, requestedModel || baseConfig.model)
+    : requestedModel || baseConfig.model;
   const effectiveConfig = normalizeAiConfig({
     ...baseConfig,
-    model: String(request.model || '').trim() || baseConfig.model
+    model
   });
   if (!hasUsableAiConfig(effectiveConfig)) {
     return { ok: false, error: 'AI config is missing base URL, model, or API key.' };
