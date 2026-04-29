@@ -1,4 +1,4 @@
-const DEFAULT_MAX_LINES = 1400;
+const DEFAULT_MAX_LINES = 27000;
 const DEFAULT_WINDOW_MS = 500;
 
 function buildAnalysisPayload(request, ragDocs, config) {
@@ -107,27 +107,19 @@ function buildChatPayload(request, ragDocs, config) {
   const maxLines = Math.max(1, Number(request.maxLogLines || config.maxLogLines || DEFAULT_MAX_LINES));
   const context = reduceContext(messages, maxLines);
   const docs = trimDocs(ragDocs, 9000);
+  const selectedIds = normalizeIds(request.selectedIds);
 
   return {
-    systemPrompt: [
-      'You are an AI diagnostic engineer for Built-in Cam ECU logs. Prioritize root-cause analysis from DLT timeline and payload evidence.',
-      'Answer in the same language as the user question. If the user writes Vietnamese, answer Vietnamese. If the user writes English, answer English.',
-      'Be clear, practical, and cite evidence using HH:mm:ss time and payload when available.',
-      'The log context sent to you contains only HH:mm:ss time and payload. Do not rely on date, delta, ECU/APID/CTID/type/level/id because those fields are not sent in this prompt.',
-      'If data is missing, say exactly which time window, message type, or FIBEX/ARXML mapping is needed.',
-      'For non-verbose DLT, do not decode raw hex into text without mapping.',
-      'If the question is about a suspected issue/bug, answer in exactly 4 sections. Section titles must be in the answer language. For Vietnamese answers, use natural Vietnamese titles with diacritics for issue verification, root cause, impact, and reproduction steps. For English answers, use "1. Issue Verification", "2. Root Cause", "3. Impact", "4. Reproduction Steps".',
-      '',
-      'Relevant ECU documentation from RAG:',
-      formatDocs(docs)
-    ].join('\n'),
+    systemPrompt: '',
     userPrompt: [
       `User question: ${request.question || ''}`,
+      `Selected/current message IDs: ${selectedIds.length ? selectedIds.map((id) => `#${id}`).join(', ') : '(none)'}`,
       '',
-      'Attached log context (HH:mm:ss and payload only):',
-      formatMessages(context),
+      'Relevant ECU documentation from system_space:',
+      formatDocs(docs),
       '',
-      'Respond as a diagnostic engineer. For a suspected issue/bug, use the 4 required sections and translate section titles into the answer language.'
+      'Attached log context (message id and payload only):',
+      formatMessages(context)
     ].join('\n'),
     promptStats: {
       contextMessages: context.length,
@@ -209,11 +201,11 @@ function diagnosticSystemPrompt(docs) {
     'Use the same language as the user question for all text fields.',
     'Goal: find root cause from DLT logs, not just summarize. Prioritize Error/Fatal, reset/ignition-cycle windows, DTC/UDS evidence, camera FPS/voltage/temperature/storage/network symptoms, and timing order.',
     'Use the provided ECU documentation snippets as evidence. If evidence is insufficient, state which log/message/mapping is missing.',
-    'For non-verbose DLT, do not interpret raw hex as text. Use only timeline/time, decoded payload, and mapping/documentation if available.',
+    'For non-verbose DLT, do not interpret raw hex as text. Use only message id, decoded payload, and mapping/documentation if available.',
     'Return structured JSON matching the schema. suspicious_message_ids must be numeric ids from the provided log rows.',
     'Do not leave issue verification, root cause, impact, or reproduction empty. If uncertain, provide the best technical hypothesis and confidence level.',
     '',
-    'ECU documentation snippets:',
+    'ECU documentation snippets from system_space:',
     formatDocs(docs)
   ].join('\n');
 }
@@ -224,11 +216,11 @@ function diagnosticUserPrompt(request, selection, query) {
     `User goal/question: ${request.query || 'Find the most likely ECU issue and root cause.'}`,
     `Context keywords: ${query}`,
     '',
-    'DLT messages in context (HH:mm:ss and payload only):',
+    'DLT messages in context (message id and payload only):',
     formatMessages(selection.context),
     '',
     'Output requirements:',
-    '- error_verification: verify whether this is an issue, certainty level, evidence by time/payload',
+    '- error_verification: verify whether this is an issue, certainty level, evidence by message id/payload',
     '- root_cause: root cause and reasoning based on log and documentation',
     '- impact: issue consequence or impact',
     '- reproduction_steps: reproduction steps or required reproduction conditions',
@@ -244,7 +236,7 @@ function buildDiagnosticQuery(request, selection) {
     ...selection.context
       .filter((message) => isFaultLevel(message.level) || message.level === 'Warn')
       .slice(0, 80)
-      .map((message) => `${message.time || message.timeMs} ${message.payload}`)
+      .map((message) => `${formatMessageId(message)} ${message.payload}`)
   ];
   return parts.join(' ').slice(0, 8000);
 }
@@ -256,8 +248,13 @@ function formatMessages(messages) {
 
   return messages.map((message) => {
     const payload = contextSafePayload(message);
-    return `time=${formatAiClockTime(message)} | payload=${payload}`;
+    return `id=${formatMessageId(message)} | payload=${payload}`;
   }).join('\n');
+}
+
+function formatMessageId(message) {
+  const id = Number(message?.id ?? message?.messageId);
+  return Number.isFinite(id) ? `#${Math.round(id)}` : '-';
 }
 
 function contextSafePayload(message) {
@@ -267,7 +264,7 @@ function contextSafePayload(message) {
       ? payload
       : `[non-verbose] ${payload.replace(/[0-9A-F]{2}(?:\s+[0-9A-F]{2}){4,}/gi, '[raw hex withheld]')}`;
   }
-  return payload.slice(0, 600);
+  return payload;
 }
 
 function formatAiClockTime(message) {
@@ -322,6 +319,12 @@ function parseOptionalNumber(value) {
   }
   const number = Number(value);
   return Number.isFinite(number) ? number : NaN;
+}
+
+function normalizeIds(values) {
+  return Array.from(new Set((Array.isArray(values) ? values : [])
+    .map(Number)
+    .filter(Number.isFinite)));
 }
 
 module.exports = {

@@ -147,7 +147,7 @@
             <div id="filter-time-range-panel" class="left-time-range-panel">
               <div class="range-head compact-range-head">
                 <span id="filter-range-title">Time Range</span>
-                <button id="btn-filter-range-unit" class="btn small range-unit-toggle" type="button">Use ID</button>
+                <button id="btn-filter-range-unit" class="btn small range-unit-toggle hidden" type="button">Time</button>
                 <span id="filter-range-limits">No logs loaded</span>
               </div>
               <div class="dual-range compact-dual-range">
@@ -163,6 +163,7 @@
               </div>
             </div>
             <div class="filter-action-row">
+              <button id="btn-reset-filter" class="btn small" type="button">Reset Filter</button>
               <button id="btn-export-csv" class="btn small">Export CSV</button>
             </div>
           </div>
@@ -196,8 +197,10 @@
             <div id="docs-status" class="docs-status">Docs: loading</div>
             <label class="field-label">Base URL</label>
             <input id="ai-base-url" class="input" spellcheck="false">
-            <label class="field-label">Model</label>
-            <input id="ai-model" class="input" spellcheck="false">
+            <label class="field-label">Default AI Model</label>
+            <select id="ai-model" class="select">
+              <option value="gpt-5.3-codex-xhigh">gpt-5.3-codex-xhigh</option>
+            </select>
             <label class="field-label">API Key</label>
             <input id="ai-key" class="input" type="password" placeholder="Leave blank to keep saved key">
             <div class="config-subtitle">Row AI Button</div>
@@ -205,17 +208,18 @@
             <input id="quick-ai-base-url" class="input" spellcheck="false">
             <label class="field-label">Row AI Model</label>
             <select id="quick-ai-model" class="select">
-              <option value="gpt-5.5">gpt-5.5</option>
+              <option value="gpt-5.3-codex-xhigh">gpt-5.3-codex-xhigh</option>
             </select>
             <label class="field-label">Row AI API Key</label>
             <input id="quick-ai-key" class="input" type="password" placeholder="Leave blank to keep saved key">
-            <label class="field-label">Row AI Prompt</label>
-            <textarea id="quick-ai-prompt" class="textarea small" spellcheck="false"></textarea>
+            <label class="field-label">Row AI Prompt (optional)</label>
+            <textarea id="quick-ai-prompt" class="textarea small" placeholder="Optional. Leave empty to only explain the selected message." spellcheck="false"></textarea>
             <label class="field-label">Extra headers JSON</label>
             <textarea id="ai-headers" class="textarea small" spellcheck="false">{}</textarea>
             <div class="inline-fields">
               <label><input id="ai-auto-scan" type="checkbox"> Suggest context after opening logs</label>
               <label>Window <input id="ai-window" class="mini-input" type="number" min="0" step="100"> ms</label>
+              <label>Max AI messages <input id="ai-max-log-lines" class="mini-input wide" type="number" min="100" step="100"></label>
             </div>
             <button id="btn-save-ai" class="btn full">Save AI Config</button>
           </div>
@@ -266,7 +270,7 @@
             <input id="ai-chat-to" type="hidden">
             <div class="range-head">
               <span id="ai-range-title">AI time range</span>
-              <button id="btn-ai-range-unit" class="btn small range-unit-toggle" type="button">Use ID</button>
+              <button id="btn-ai-range-unit" class="btn small range-unit-toggle hidden" type="button">Time</button>
               <span id="ai-range-limits">No logs loaded</span>
             </div>
             <div class="dual-range">
@@ -289,7 +293,7 @@
                 <button id="btn-ai-prompt" class="btn small ai-prompt-heading-btn">Prompt</button>
                 <select id="ai-runtime-model" class="select ai-model-select" title="AI model for this Send">
                   <option value="">Config Default</option>
-                  <option value="gpt-5.5" selected>gpt-5.5</option>
+                  <option value="gpt-5.3-codex-xhigh" selected>gpt-5.3-codex-xhigh</option>
                 </select>
               </div>
             </div>
@@ -302,7 +306,7 @@
             </div>
             <div id="ai-prompt-panel" class="ai-prompt-panel hidden">
               <label class="field-label" for="ai-guidance-input">AI response guidance</label>
-              <textarea id="ai-guidance-input" class="textarea ai-guidance-input" placeholder="Optional. Example: answer in 4 sections, prioritize root cause, cite evidence by time/payload..." spellcheck="false"></textarea>
+              <textarea id="ai-guidance-input" class="textarea ai-guidance-input" placeholder="Optional. Leave empty to send only your chat question and log context." spellcheck="false"></textarea>
             </div>
             <div class="ai-chat-input-row">
               <textarea id="ai-chat-input" class="textarea ai-chat-input" placeholder="Type a diagnostic question or suspected issue..." spellcheck="false"></textarea>
@@ -310,7 +314,7 @@
                 <select id="ai-chat-mode-select" class="select ai-mode-select">
                   <option value="selection">Current line</option>
                   <option value="range">Range</option>
-                  <option value="filtered">All current line</option>
+                  <option value="filtered" selected>All current line</option>
                   <option value="errors">Bug</option>
                 </select>
                 <button id="btn-ai-chat-send" class="btn primary">Send</button>

@@ -11,7 +11,16 @@ const { writeExportFile } = require('./src/services/exporter');
 
 const APP_ROOT = __dirname;
 const UPDATE_CHECK_DELAY_MS = 5000;
-const DEFAULT_STRONG_AI_MODEL = 'gpt-5.5';
+const DEFAULT_STRONG_AI_MODEL = 'gpt-5.3-codex-xhigh';
+const AI_DEFAULTS_VERSION = 5;
+const PREVIOUS_DEFAULT_STRONG_AI_MODELS = new Set([
+  'gpt-5.1-codex-max',
+  'cx/gpt-5.1-codex-max',
+  'gpt-5.2',
+  'cx/gpt-5.2',
+  'gpt-5.5',
+  'cx/gpt-5.5'
+]);
 const DEFAULT_QUICK_AI_MODEL = DEFAULT_STRONG_AI_MODEL;
 const LEGACY_QUICK_AI_MODELS = new Set([
   'gpt-5.1-codex-mini',
@@ -19,15 +28,17 @@ const LEGACY_QUICK_AI_MODELS = new Set([
   'gpt-5-codex-mini',
   'cx/gpt-5-codex-mini'
 ]);
-const DEFAULT_QUICK_AI_PROMPT = 'Explain only the selected message. Use nearby messages only as context. Do not analyze the whole log unless the selected message requires it.';
+const DEFAULT_QUICK_AI_PROMPT = '';
+const LEGACY_DEFAULT_QUICK_AI_PROMPT = 'Mục tiêu: tìm ra lỗi, nguyên nhân lỗi và phân tích lỗi đó dựa trên payload log. Chỉ kết luận khi có bằng chứng; nếu chưa đủ dữ liệu, nêu rõ cần thêm thông tin gì.';
 const DEFAULT_AI_CONFIG = {
   baseUrl: 'https://rsqd56n.9router.com/v1',
-  model: 'cx/gpt-5.5',
+  model: 'cx/gpt-5.3-codex-xhigh',
   apiKey: 'sk-b089739d3e949acd-ztg3i5-13a62048',
   headers: {},
   contextWindowMs: 500,
-  maxLogLines: 1400,
+  maxLogLines: 27000,
   autoScan: false,
+  aiDefaultsVersion: AI_DEFAULTS_VERSION,
   quickAi: {
     baseUrl: '',
     model: DEFAULT_QUICK_AI_MODEL,
@@ -126,6 +137,9 @@ function readConfigInternal() {
       baseUrl: parsed.baseUrl || envConfig.baseUrl || DEFAULT_AI_CONFIG.baseUrl,
       model: parsed.model || envConfig.model || DEFAULT_AI_CONFIG.model,
       headers: parsed.headers && typeof parsed.headers === 'object' ? parsed.headers : {}
+    }, {
+      migratePreviousDefaults: !envConfig.model && !parsed.aiDefaultsVersion,
+      migrateContextLimit: Number(parsed.aiDefaultsVersion || 0) < AI_DEFAULTS_VERSION
     });
   } catch (error) {
     return normalizeAiConfig({ ...DEFAULT_AI_CONFIG, ...envConfig, configError: error.message });
@@ -157,13 +171,14 @@ function saveConfig(input) {
     model: String(input.model || current.model).trim(),
     headers: input.headers && typeof input.headers === 'object' ? input.headers : {},
     contextWindowMs: Number(input.contextWindowMs || current.contextWindowMs || 500),
-    maxLogLines: Number(input.maxLogLines || current.maxLogLines || 1400),
+    maxLogLines: Number(input.maxLogLines || current.maxLogLines || DEFAULT_AI_CONFIG.maxLogLines),
     autoScan: Boolean(input.autoScan),
+    aiDefaultsVersion: AI_DEFAULTS_VERSION,
     quickAi: {
       ...(current.quickAi || {}),
       baseUrl: String(quickInput.baseUrl || current.quickAi?.baseUrl || current.baseUrl).trim(),
       model: String(quickInput.model || current.quickAi?.model || DEFAULT_QUICK_AI_MODEL).trim(),
-      prompt: String(Object.prototype.hasOwnProperty.call(quickInput, 'prompt') ? quickInput.prompt : current.quickAi?.prompt || DEFAULT_QUICK_AI_PROMPT).trim() || DEFAULT_QUICK_AI_PROMPT
+      prompt: String(Object.prototype.hasOwnProperty.call(quickInput, 'prompt') ? quickInput.prompt : current.quickAi?.prompt || DEFAULT_QUICK_AI_PROMPT).trim()
     }
   };
 
@@ -186,28 +201,33 @@ function saveConfig(input) {
   return normalized;
 }
 
-function normalizeAiConfig(config) {
+function normalizeAiConfig(config, options = {}) {
   const next = { ...config };
-  next.model = normalizeModelForBaseUrl(next.baseUrl, next.model);
-  next.quickAi = normalizeQuickAiConfig(next.quickAi, next);
+  const maxLogLines = Number(next.maxLogLines);
+  if (!Number.isFinite(maxLogLines) || maxLogLines <= 0 || (options.migrateContextLimit && maxLogLines <= 1400)) {
+    next.maxLogLines = DEFAULT_AI_CONFIG.maxLogLines;
+  }
+  next.model = normalizeConfiguredModelForBaseUrl(next.baseUrl, next.model, options);
+  next.quickAi = normalizeQuickAiConfig(next.quickAi, next, options);
   return next;
 }
 
-function normalizeQuickAiConfig(input, parent) {
+function normalizeQuickAiConfig(input, parent, options = {}) {
   const source = input && typeof input === 'object' ? input : {};
   const baseUrl = String(source.baseUrl || parent.baseUrl || DEFAULT_AI_CONFIG.baseUrl).trim();
-  const model = normalizeQuickAiModelForBaseUrl(baseUrl, source.model);
+  const model = normalizeQuickAiModelForBaseUrl(baseUrl, source.model, options);
+  const prompt = String(source.prompt || DEFAULT_QUICK_AI_PROMPT).trim();
   return {
     baseUrl,
     model,
     apiKey: String(source.apiKey || '').trim(),
-    prompt: String(source.prompt || DEFAULT_QUICK_AI_PROMPT).trim() || DEFAULT_QUICK_AI_PROMPT
+    prompt: prompt === LEGACY_DEFAULT_QUICK_AI_PROMPT ? '' : prompt
   };
 }
 
-function normalizeQuickAiModelForBaseUrl(baseUrl, model) {
+function normalizeQuickAiModelForBaseUrl(baseUrl, model, options = {}) {
   const value = String(model || '').trim();
-  if (!value || isLegacyQuickAiModel(value)) {
+  if (!value || isLegacyQuickAiModel(value) || (options.migratePreviousDefaults && isPreviousDefaultStrongAiModel(value))) {
     return normalizeModelForBaseUrl(baseUrl, DEFAULT_QUICK_AI_MODEL);
   }
   return normalizeModelForBaseUrl(baseUrl, value);
@@ -217,6 +237,20 @@ function isLegacyQuickAiModel(model) {
   const value = String(model || '').trim().toLowerCase();
   const leaf = value.includes('/') ? value.split('/').pop() : value;
   return LEGACY_QUICK_AI_MODELS.has(value) || LEGACY_QUICK_AI_MODELS.has(leaf);
+}
+
+function isPreviousDefaultStrongAiModel(model) {
+  const value = String(model || '').trim().toLowerCase();
+  const leaf = value.includes('/') ? value.split('/').pop() : value;
+  return PREVIOUS_DEFAULT_STRONG_AI_MODELS.has(value) || PREVIOUS_DEFAULT_STRONG_AI_MODELS.has(leaf);
+}
+
+function normalizeConfiguredModelForBaseUrl(baseUrl, model, options = {}) {
+  const value = String(model || '').trim();
+  if (!value || (options.migratePreviousDefaults && isPreviousDefaultStrongAiModel(value))) {
+    return normalizeModelForBaseUrl(baseUrl, DEFAULT_STRONG_AI_MODEL);
+  }
+  return normalizeModelForBaseUrl(baseUrl, value);
 }
 
 function normalizeModelForBaseUrl(baseUrl, model) {
@@ -239,27 +273,13 @@ function quickAiEffectiveConfig(config) {
   };
 }
 
-function buildChatRagDocs(query, request) {
-  if (!ragStore) return [];
-  const regularDocs = ragStore.search(query, 8);
-  if (!request?.includeSystemSpaceDocs || typeof ragStore.searchSource !== 'function') {
-    return regularDocs;
-  }
-  const systemSpaceDocs = ragStore.searchSource('system_space', query, 4);
-  return mergeRagDocs(systemSpaceDocs, regularDocs, 10);
+function buildSystemSpaceDocs(query, limit = 6) {
+  if (!ragStore || typeof ragStore.searchSource !== 'function') return [];
+  return ragStore.searchSource('system_space', query, limit);
 }
 
-function mergeRagDocs(priorityDocs, regularDocs, limit) {
-  const docs = [];
-  const seen = new Set();
-  for (const doc of [...(priorityDocs || []), ...(regularDocs || [])]) {
-    const key = `${doc.sourcePath || doc.source || ''}:${doc.id ?? doc.text}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    docs.push(doc);
-    if (docs.length >= limit) break;
-  }
-  return docs;
+function buildChatRagDocs(query) {
+  return buildSystemSpaceDocs(query, 8);
 }
 
 function defaultDocumentPaths() {
@@ -344,7 +364,13 @@ ipcMain.handle('logs:open-dialog', async () => {
 
 ipcMain.handle('logs:parse', async (_event, filePaths) => {
   stopParseWorker();
-  const files = (filePaths || []).filter((filePath) => fs.existsSync(filePath));
+  const files = (filePaths || []).filter((filePath) => {
+    try {
+      return fs.existsSync(filePath) && fs.statSync(filePath).isFile();
+    } catch (_error) {
+      return false;
+    }
+  });
   if (!files.length) {
     return { ok: false, error: 'No readable file selected.' };
   }
@@ -459,7 +485,7 @@ ipcMain.handle('ai:analyze', async (_event, request) => {
     return { ok: false, error: 'AI config is missing base URL, model, or API key.' };
   }
 
-  const ragDocs = ragStore ? ragStore.search(request.query || request.title || '', 6) : [];
+  const ragDocs = buildSystemSpaceDocs(request.query || request.title || '', 6);
   const payload = buildAnalysisPayload(request, ragDocs, config);
   const result = await new AiClient(config).diagnose(payload);
   return { ok: true, result, ragDocs, promptStats: payload.promptStats };
@@ -485,7 +511,7 @@ ipcMain.handle('ai:chat', async (_event, request) => {
     request.question || '',
     ...(Array.isArray(request.messages) ? request.messages.slice(0, 80).map((message) => message.payload || '') : [])
   ].join(' ');
-  const ragDocs = buildChatRagDocs(query, request);
+  const ragDocs = buildChatRagDocs(query);
   const payload = buildChatPayload(request, ragDocs, effectiveConfig);
   const result = await new AiClient(effectiveConfig).chat(payload);
   return { ok: true, result, ragDocs, promptStats: payload.promptStats };
@@ -497,7 +523,7 @@ ipcMain.handle('ai:natural-search', async (_event, request) => {
     return { ok: false, error: 'AI config is missing base URL, model, or API key.' };
   }
 
-  const ragDocs = ragStore ? ragStore.search(request.query || '', 4) : [];
+  const ragDocs = buildSystemSpaceDocs(request.query || '', 4);
   const payload = buildNaturalSearchPayload(request, ragDocs);
   const result = await new AiClient(config).naturalSearch(payload);
   return { ok: true, result, ragDocs };
@@ -509,7 +535,7 @@ ipcMain.handle('ai:sequence', async (_event, request) => {
     return { ok: false, error: 'AI config is missing base URL, model, or API key.' };
   }
 
-  const ragDocs = ragStore ? ragStore.search(request.query || 'sequence communication timeout', 4) : [];
+  const ragDocs = buildSystemSpaceDocs(request.query || 'sequence communication timeout', 4);
   const payload = buildSequencePayload(request, ragDocs, config);
   const result = await new AiClient(config).sequenceDiagram(payload);
   return { ok: true, result, ragDocs };
@@ -521,7 +547,7 @@ ipcMain.handle('ai:script', async (_event, request) => {
     return { ok: false, error: 'AI config is missing base URL, model, or API key.' };
   }
 
-  const ragDocs = ragStore ? ragStore.search(request.query || 'reproduce diagnostic fault', 4) : [];
+  const ragDocs = buildSystemSpaceDocs(request.query || 'reproduce diagnostic fault', 4);
   const payload = buildScriptPayload(request, ragDocs, config);
   const result = await new AiClient(config).reproductionScript(payload);
   return { ok: true, result, ragDocs };

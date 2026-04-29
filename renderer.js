@@ -8,17 +8,52 @@ const MAX_RENDER_ROWS = 120;
 const MIN_LOG_SCROLL_THUMB_HEIGHT = 30;
 const VIRTUAL_SCROLL_END_PADDING = MIN_ROW_HEIGHT * 2;
 const ESTIMATED_MONO_CHAR_WIDTH = 7.8;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const SYNTHETIC_RANGE_STEP_MS = 1000;
 const DEFAULT_LOG_COLUMNS = [66, 108, 76, 640];
 const MIN_LOG_COLUMNS = [42, 72, 52, 180];
-const DEFAULT_RUNTIME_MODEL = 'gpt-5.5';
+const DEFAULT_RUNTIME_MODEL = 'gpt-5.3-codex-xhigh';
 const DEFAULT_QUICK_AI_MODEL = DEFAULT_RUNTIME_MODEL;
+const DEFAULT_AI_CHAT_MODE = 'filtered';
+const DEFAULT_AI_MAX_LOG_LINES = 27000;
+const AI_CONTEXT_SUSPICIOUS_KEYWORDS = [
+  'error',
+  'fail',
+  'failed',
+  'failure',
+  'fatal',
+  'fault',
+  'timeout',
+  'timed out',
+  'exception',
+  'reset',
+  'dtc',
+  'uds',
+  'negative response',
+  'nrc',
+  'overheat',
+  'thermal',
+  'voltage',
+  'fps',
+  'drop',
+  'lost',
+  'disconnect'
+];
 const LEGACY_QUICK_AI_MODELS = new Set([
   'gpt-5.1-codex-mini',
   'cx/gpt-5.1-codex-mini',
   'gpt-5-codex-mini',
   'cx/gpt-5-codex-mini'
 ]);
-const DEFAULT_QUICK_AI_PROMPT = 'Explain only the selected message. Use nearby messages only as context. Do not analyze the whole log unless the selected message requires it.';
+const PREVIOUS_DEFAULT_STRONG_AI_MODELS = new Set([
+  'gpt-5.1-codex-max',
+  'cx/gpt-5.1-codex-max',
+  'gpt-5.2',
+  'cx/gpt-5.2',
+  'gpt-5.5',
+  'cx/gpt-5.5'
+]);
+const DEFAULT_QUICK_AI_PROMPT = '';
 
 const state = {
   messages: [],
@@ -35,7 +70,7 @@ const state = {
   parseDone: false,
   aiConfig: null,
   aiConfigUnlocked: false,
-  aiChatMode: 'selection',
+  aiChatMode: DEFAULT_AI_CHAT_MODE,
   aiSending: false,
   quickAiPendingId: null,
   naturalSearching: false,
@@ -63,7 +98,10 @@ const state = {
   virtualMetrics: null,
   lastVirtualStart: -1,
   lastVirtualEnd: -1,
-  lastVirtualCount: -1
+  lastVirtualCount: -1,
+  dropDepth: 0,
+  lastDropSignature: '',
+  lastDropAt: 0
 };
 
 const el = {
@@ -151,6 +189,7 @@ const el = {
   aiHeaders: document.getElementById('ai-headers'),
   aiAutoScan: document.getElementById('ai-auto-scan'),
   aiWindow: document.getElementById('ai-window'),
+  aiMaxLogLines: document.getElementById('ai-max-log-lines'),
   btnSaveAi: document.getElementById('btn-save-ai'),
   aiChatLog: document.getElementById('ai-report'),
   aiChatInput: document.getElementById('ai-chat-input'),
@@ -266,18 +305,28 @@ function wireEvents() {
     el.btnUpdateErrorClose.addEventListener('click', () => el.updateModalOverlay.classList.add('hidden'));
   }
 
+  window.addEventListener('dragenter', handleFileDragEnter);
+  window.addEventListener('dragover', handleFileDragOver);
+  window.addEventListener('dragleave', handleFileDragLeave);
+  window.addEventListener('drop', handleFileDropEnd);
+  if (api.onDroppedFiles) {
+    api.onDroppedFiles(handleDroppedPaths);
+  }
+
   el.dropZone.addEventListener('dragover', (event) => {
     event.preventDefault();
+    event.stopPropagation();
     el.dropZone.classList.add('dragover');
   });
-  el.dropZone.addEventListener('dragleave', () => el.dropZone.classList.remove('dragover'));
+  el.dropZone.addEventListener('dragleave', () => {
+    if (!state.dropDepth) el.dropZone.classList.remove('dragover');
+  });
   el.dropZone.addEventListener('drop', async (event) => {
     event.preventDefault();
+    event.stopPropagation();
     el.dropZone.classList.remove('dragover');
-    const paths = api.pathsFromDroppedFiles(event.dataTransfer.files);
-    if (paths.length) {
-      await openFiles(paths);
-    }
+    const paths = droppedPathsFromEvent(event);
+    await handleDroppedPaths(paths);
   });
 
   for (const item of [el.searchInput, el.timeFrom, el.timeTo].filter(Boolean)) {
@@ -325,8 +374,8 @@ function wireEvents() {
   });
   el.btnSaveAi.addEventListener('click', saveAiConfig);
   if (api.listAiModels) {
-    el.aiBaseUrl.addEventListener('change', () => refreshAiModelOptions({ runtimeModel: DEFAULT_RUNTIME_MODEL }));
-    el.aiKey.addEventListener('change', () => refreshAiModelOptions({ runtimeModel: el.aiRuntimeModel.value || DEFAULT_RUNTIME_MODEL }));
+    el.aiBaseUrl.addEventListener('change', () => refreshAiModelOptions({ model: DEFAULT_RUNTIME_MODEL, runtimeModel: el.aiRuntimeModel.value }));
+    el.aiKey.addEventListener('change', () => refreshAiModelOptions({ model: el.aiModel.value || DEFAULT_RUNTIME_MODEL, runtimeModel: el.aiRuntimeModel.value }));
     el.quickAiBaseUrl.addEventListener('change', () => refreshAiModelOptions({ quickModel: DEFAULT_QUICK_AI_MODEL }));
     el.quickAiKey.addEventListener('change', () => refreshAiModelOptions({ quickModel: el.quickAiModel.value || DEFAULT_QUICK_AI_MODEL }));
   }
@@ -383,6 +432,73 @@ async function openFromDialog() {
   if (paths.length) {
     await openFiles(paths);
   }
+}
+
+function isFileDragEvent(event) {
+  return Array.from(event?.dataTransfer?.types || []).includes('Files');
+}
+
+function handleFileDragEnter(event) {
+  if (!isFileDragEvent(event)) return;
+  event.preventDefault();
+  state.dropDepth += 1;
+  el.dropZone.classList.add('dragover');
+}
+
+function handleFileDragOver(event) {
+  if (!isFileDragEvent(event)) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+  el.dropZone.classList.add('dragover');
+}
+
+function handleFileDragLeave(event) {
+  if (!isFileDragEvent(event)) return;
+  state.dropDepth = Math.max(0, state.dropDepth - 1);
+  if (!state.dropDepth) el.dropZone.classList.remove('dragover');
+}
+
+async function handleFileDropEnd(event) {
+  if (!isFileDragEvent(event)) return;
+  event.preventDefault();
+  state.dropDepth = 0;
+  el.dropZone.classList.remove('dragover');
+  const paths = droppedPathsFromEvent(event);
+  await handleDroppedPaths(paths);
+}
+
+function droppedPathsFromEvent(event) {
+  const files = Array.from(event?.dataTransfer?.files || []);
+  const itemFiles = Array.from(event?.dataTransfer?.items || [])
+    .filter((item) => item.kind === 'file' && typeof item.getAsFile === 'function')
+    .map((item) => item.getAsFile())
+    .filter(Boolean);
+  const allFiles = files.length ? files : itemFiles;
+
+  let paths = [];
+  if (api.pathsFromDroppedFiles && event?.dataTransfer?.files) {
+    paths = api.pathsFromDroppedFiles(event.dataTransfer.files);
+  }
+  if (!paths.length && api.pathFromDroppedFile) {
+    paths = allFiles.map((file) => api.pathFromDroppedFile(file)).filter(Boolean);
+  }
+  return paths;
+}
+
+async function handleDroppedPaths(paths) {
+  const safePaths = Array.from(new Set((paths || []).filter(Boolean)));
+  if (!safePaths.length) {
+    el.parseStatus.textContent = 'Drop detected, but file paths were empty. Use Open DLT if this was not a local file.';
+    return;
+  }
+  const signature = safePaths.join('\n');
+  const now = Date.now();
+  if (signature === state.lastDropSignature && now - state.lastDropAt < 1000) {
+    return;
+  }
+  state.lastDropSignature = signature;
+  state.lastDropAt = now;
+  await openFiles(safePaths);
 }
 
 async function openFiles(paths) {
@@ -675,11 +791,9 @@ function handleUpdateStatus(status) {
 
 function appendMessages(messages) {
   for (const message of messages) {
-    if (state.firstTimeMs === null && Number.isFinite(message.timeMs)) {
-      state.firstTimeMs = message.timeMs;
-    }
     if (Number.isFinite(message.timeMs)) {
-      state.lastTimeMs = message.timeMs;
+      state.firstTimeMs = state.firstTimeMs === null ? message.timeMs : Math.min(state.firstTimeMs, message.timeMs);
+      state.lastTimeMs = state.lastTimeMs === null ? message.timeMs : Math.max(state.lastTimeMs, message.timeMs);
       message.relTimeMs = message.timeMs - state.firstTimeMs;
     } else {
       message.relTimeMs = message.id;
@@ -687,6 +801,7 @@ function appendMessages(messages) {
     message.searchBlob = buildSearchBlob(message);
     state.messages.push(message);
   }
+  updateRelativeTimes();
   if (!hasActiveFilters()) {
     for (let index = state.filtered.length; index < state.messages.length; index += 1) {
       state.filtered.push(index);
@@ -694,6 +809,80 @@ function appendMessages(messages) {
   } else {
     applyFilters(false);
   }
+}
+
+function updateRelativeTimes() {
+  const rangeAxis = buildRangeTimeAxisValues();
+  for (let index = 0; index < state.messages.length; index += 1) {
+    const message = state.messages[index];
+    message.rangeTimeMs = rangeAxis[index] ?? index * SYNTHETIC_RANGE_STEP_MS;
+    message.relTimeMs = Number.isFinite(message.timeMs) && Number.isFinite(state.firstTimeMs)
+      ? message.timeMs - state.firstTimeMs
+      : message.id;
+  }
+}
+
+function buildRangeTimeAxisValues() {
+  const clockAxis = buildClockTimeAxisValues();
+  if (hasUsableAxisSpan(clockAxis)) return fillAxisGaps(clockAxis);
+
+  return state.messages.map((_, index) => index * SYNTHETIC_RANGE_STEP_MS);
+}
+
+function buildClockTimeAxisValues() {
+  let dayOffset = 0;
+  let previous = null;
+  return state.messages.map((message) => {
+    const clockMs = parseClockTimeOfDayMs(message.time);
+    if (!Number.isFinite(clockMs)) return NaN;
+
+    let value = clockMs + dayOffset;
+    while (previous !== null && value < previous) {
+      dayOffset += DAY_MS;
+      value = clockMs + dayOffset;
+    }
+    previous = value;
+    return value;
+  });
+}
+
+function hasUsableAxisSpan(values) {
+  const finite = values.filter(Number.isFinite);
+  if (finite.length < 2) return false;
+  return Math.max(...finite) > Math.min(...finite);
+}
+
+function fillAxisGaps(values) {
+  const result = values.slice();
+  const finiteIndexes = result
+    .map((value, index) => (Number.isFinite(value) ? index : -1))
+    .filter((index) => index >= 0);
+  if (!finiteIndexes.length) {
+    return state.messages.map((_, index) => index * SYNTHETIC_RANGE_STEP_MS);
+  }
+
+  const firstIndex = finiteIndexes[0];
+  for (let index = firstIndex - 1; index >= 0; index -= 1) {
+    result[index] = result[index + 1] - SYNTHETIC_RANGE_STEP_MS;
+  }
+
+  for (let finiteIndex = 0; finiteIndex < finiteIndexes.length - 1; finiteIndex += 1) {
+    const startIndex = finiteIndexes[finiteIndex];
+    const endIndex = finiteIndexes[finiteIndex + 1];
+    const startValue = result[startIndex];
+    const endValue = result[endIndex];
+    const gap = endIndex - startIndex;
+    for (let index = startIndex + 1; index < endIndex; index += 1) {
+      result[index] = startValue + ((endValue - startValue) * (index - startIndex)) / gap;
+    }
+  }
+
+  const lastIndex = finiteIndexes[finiteIndexes.length - 1];
+  for (let index = lastIndex + 1; index < result.length; index += 1) {
+    result[index] = result[index - 1] + SYNTHETIC_RANGE_STEP_MS;
+  }
+
+  return result;
 }
 
 function applyFilters(render = true) {
@@ -770,8 +959,9 @@ function messageWithinFilterRange(message, range) {
   if (range.unit === 'id') {
     return Number(message.id) >= range.from && Number(message.id) <= range.to;
   }
-  if (!Number.isFinite(message.timeMs)) return true;
-  return message.timeMs >= range.from && message.timeMs <= range.to;
+  const value = getMessageRangeTimeMs(message);
+  if (!Number.isFinite(value)) return true;
+  return value >= range.from && value <= range.to;
 }
 
 function buildSearchBlob(message) {
@@ -800,6 +990,8 @@ function hasActiveFilters() {
 
 function resetFilters() {
   el.searchInput.value = '';
+  if (el.focusSearchInput) el.focusSearchInput.value = '';
+  if (el.naturalQuery) el.naturalQuery.value = '';
   resetFilterRange(false);
   if (el.caseSensitive) el.caseSensitive.checked = false;
   if (el.regexSearch) el.regexSearch.checked = false;
@@ -1280,25 +1472,38 @@ function renderFileList() {
 async function loadAiConfig() {
   state.aiConfig = await api.getAiConfig();
   el.aiBaseUrl.value = state.aiConfig.baseUrl || '';
-  el.aiModel.value = state.aiConfig.model || '';
   const quickAi = state.aiConfig.quickAi || {};
   el.quickAiBaseUrl.value = quickAi.baseUrl || state.aiConfig.baseUrl || '';
-  el.quickAiPrompt.value = quickAi.prompt || DEFAULT_QUICK_AI_PROMPT;
+  el.quickAiPrompt.value = quickAi.prompt || '';
   el.aiHeaders.value = JSON.stringify(state.aiConfig.headers || {}, null, 2);
   el.aiAutoScan.checked = Boolean(state.aiConfig.autoScan);
   el.aiWindow.value = state.aiConfig.contextWindowMs || 500;
+  if (el.aiMaxLogLines) {
+    el.aiMaxLogLines.value = state.aiConfig.maxLogLines || DEFAULT_AI_MAX_LOG_LINES;
+  }
   el.aiKey.placeholder = state.aiConfig.apiKeySet ? `Saved ${state.aiConfig.apiKeyPreview}` : 'Paste API key';
   el.quickAiKey.placeholder = quickAi.apiKeySet
     ? `Saved ${quickAi.apiKeyPreview}`
     : (state.aiConfig.apiKeySet ? 'Uses main AI key' : 'Paste API key');
   await refreshAiModelOptions({
-    runtimeModel: DEFAULT_RUNTIME_MODEL,
+    model: state.aiConfig.model || DEFAULT_RUNTIME_MODEL,
+    runtimeModel: el.aiRuntimeModel?.value || '',
     quickModel: quickAi.model || DEFAULT_QUICK_AI_MODEL
   });
 }
 
+function setConfiguredModelSelection(model) {
+  if (!el.aiModel) return;
+  const baseUrl = el.aiBaseUrl?.value || state.aiConfig?.baseUrl || '';
+  el.aiModel.value = resolveConfiguredModelSelection(el.aiModel, model, baseUrl);
+}
+
 function setRuntimeModelSelection(model) {
   if (!el.aiRuntimeModel) return;
+  if (!model) {
+    el.aiRuntimeModel.value = '';
+    return;
+  }
   const baseUrl = el.aiBaseUrl?.value || state.aiConfig?.baseUrl || '';
   el.aiRuntimeModel.value = resolveRuntimeModelSelection(el.aiRuntimeModel, model, baseUrl);
 }
@@ -1310,19 +1515,24 @@ function setQuickAiModelSelection(model) {
 }
 
 async function refreshAiModelOptions(selection = {}) {
-  const runtimeSelection = selection.runtimeModel || el.aiRuntimeModel?.value || DEFAULT_RUNTIME_MODEL;
+  const modelSelection = selection.model || el.aiModel?.value || state.aiConfig?.model || DEFAULT_RUNTIME_MODEL;
+  const runtimeSelection = Object.prototype.hasOwnProperty.call(selection, 'runtimeModel')
+    ? selection.runtimeModel
+    : (el.aiRuntimeModel?.value || '');
   const quickSelection = selection.quickModel || el.quickAiModel?.value || state.aiConfig?.quickAi?.model || DEFAULT_QUICK_AI_MODEL;
   const headers = readAiHeadersForLookup();
   const mainBaseUrl = el.aiBaseUrl?.value || state.aiConfig?.baseUrl || '';
   const quickBaseUrl = el.quickAiBaseUrl?.value || state.aiConfig?.quickAi?.baseUrl || mainBaseUrl;
 
-  const [runtimeModels, quickModels] = await Promise.all([
-    fetchAiModelOptions(mainBaseUrl, el.aiKey?.value || '', headers, [runtimeSelection, DEFAULT_RUNTIME_MODEL]),
+  const [mainModels, quickModels] = await Promise.all([
+    fetchAiModelOptions(mainBaseUrl, el.aiKey?.value || '', headers, [modelSelection, runtimeSelection, DEFAULT_RUNTIME_MODEL]),
     fetchAiModelOptions(quickBaseUrl, el.quickAiKey?.value || '', headers, [quickSelection, DEFAULT_QUICK_AI_MODEL])
   ]);
 
-  setModelSelectOptions(el.aiRuntimeModel, runtimeModels, { includeConfigDefault: true });
+  setModelSelectOptions(el.aiModel, mainModels);
+  setModelSelectOptions(el.aiRuntimeModel, mainModels, { includeConfigDefault: true });
   setModelSelectOptions(el.quickAiModel, quickModels);
+  setConfiguredModelSelection(modelSelection);
   setRuntimeModelSelection(runtimeSelection);
   setQuickAiModelSelection(quickSelection);
 }
@@ -1336,7 +1546,7 @@ async function fetchAiModelOptions(baseUrl, apiKey, headers, fallbackModels = []
   try {
     const response = await api.listAiModels({ baseUrl, apiKey, headers });
     if (response.ok && Array.isArray(response.models) && response.models.length) {
-      return normalizeUiModelOptions(response.models);
+      return normalizeUiModelOptions([...fallback, ...response.models]);
     }
   } catch (_error) {
     // Fallback keeps the UI usable when a provider does not expose /models.
@@ -1362,8 +1572,8 @@ function setModelSelectOptions(select, models, options = {}) {
 function fallbackModelOptions(baseUrl, preferredModels = []) {
   const isRouter = String(baseUrl || '').includes('9router.com');
   const ids = isRouter
-    ? ['cx/gpt-5.5', 'cx/gpt-5.4', 'cx/gpt-5.2', 'cx/gpt-5.1-codex-mini', 'cx/gpt-5-codex-mini']
-    : ['gpt-5.5', 'gpt-5.4', 'gpt-5.2', 'gpt-5.1-codex-mini', 'gpt-5-codex-mini'];
+    ? ['cx/gpt-5.3-codex-xhigh', 'cx/gpt-5.1-codex-max', 'cx/gpt-5.2', 'cx/gpt-5.4', 'cx/gpt-5.5', 'cx/gpt-5.1-codex-mini', 'cx/gpt-5-codex-mini']
+    : ['gpt-5.3-codex-xhigh', 'gpt-5.1-codex-max', 'gpt-5.2', 'gpt-5.4', 'gpt-5.5', 'gpt-5.1-codex-mini', 'gpt-5-codex-mini'];
   const preferred = preferredModels
     .map((model) => normalizeUiModelForBaseUrl(baseUrl, model))
     .filter(Boolean);
@@ -1391,10 +1601,24 @@ function normalizeUiModelOptions(models) {
   return normalized;
 }
 
+function resolveConfiguredModelSelection(select, model, baseUrl) {
+  const values = Array.from(select.options || []).map((option) => option.value);
+  const candidates = [
+    ...(isPreviousDefaultStrongAiModel(model) ? [] : modelValueCandidates(model, baseUrl)),
+    ...modelValueCandidates(DEFAULT_RUNTIME_MODEL, baseUrl)
+  ];
+
+  for (const candidate of candidates) {
+    if (values.includes(candidate)) return candidate;
+  }
+
+  return values.find((value) => value) || '';
+}
+
 function resolveRuntimeModelSelection(select, model, baseUrl) {
   const values = Array.from(select.options || []).map((option) => option.value);
   const candidates = [
-    ...modelValueCandidates(model, baseUrl),
+    ...(isPreviousDefaultStrongAiModel(model) ? [] : modelValueCandidates(model, baseUrl)),
     ...modelValueCandidates(DEFAULT_RUNTIME_MODEL, baseUrl)
   ];
 
@@ -1408,7 +1632,7 @@ function resolveRuntimeModelSelection(select, model, baseUrl) {
 function resolveQuickModelSelection(select, model, baseUrl) {
   const values = Array.from(select.options || []).map((option) => option.value);
   const candidates = [
-    ...(isLegacyQuickAiModel(model) ? [] : modelValueCandidates(model, baseUrl)),
+    ...(isLegacyQuickAiModel(model) || isPreviousDefaultStrongAiModel(model) ? [] : modelValueCandidates(model, baseUrl)),
     ...modelValueCandidates(DEFAULT_QUICK_AI_MODEL, baseUrl)
   ];
 
@@ -1443,6 +1667,12 @@ function isLegacyQuickAiModel(model) {
   const value = String(model || '').trim().toLowerCase();
   const leaf = modelLeaf(value);
   return LEGACY_QUICK_AI_MODELS.has(value) || LEGACY_QUICK_AI_MODELS.has(leaf);
+}
+
+function isPreviousDefaultStrongAiModel(model) {
+  const value = String(model || '').trim().toLowerCase();
+  const leaf = modelLeaf(value);
+  return PREVIOUS_DEFAULT_STRONG_AI_MODELS.has(value) || PREVIOUS_DEFAULT_STRONG_AI_MODELS.has(leaf);
 }
 
 function strongestModelValue(values) {
@@ -1497,7 +1727,7 @@ async function saveAiConfig() {
     return;
   }
 
-  const runtimeModel = el.aiRuntimeModel?.value || DEFAULT_RUNTIME_MODEL;
+  const runtimeModel = el.aiRuntimeModel?.value || '';
   state.aiConfig = await api.saveAiConfig({
     baseUrl: el.aiBaseUrl.value,
     model: el.aiModel.value,
@@ -1511,7 +1741,7 @@ async function saveAiConfig() {
     headers,
     autoScan: el.aiAutoScan.checked,
     contextWindowMs: Number(el.aiWindow.value || 500),
-    maxLogLines: 1400
+    maxLogLines: Number(el.aiMaxLogLines?.value || DEFAULT_AI_MAX_LOG_LINES)
   });
   el.aiKey.value = '';
   el.quickAiKey.value = '';
@@ -1520,7 +1750,7 @@ async function saveAiConfig() {
   el.quickAiKey.placeholder = quickAi.apiKeySet
     ? `Saved ${quickAi.apiKeyPreview}`
     : (state.aiConfig.apiKeySet ? 'Uses main AI key' : 'Paste API key');
-  el.quickAiPrompt.value = quickAi.prompt || DEFAULT_QUICK_AI_PROMPT;
+  el.quickAiPrompt.value = quickAi.prompt || '';
   el.quickAiBaseUrl.value = quickAi.baseUrl || state.aiConfig.baseUrl || '';
   await refreshAiModelOptions({
     runtimeModel,
@@ -1578,26 +1808,28 @@ function buildUserGuideContent() {
     '- Drag the header separators to resize columns.',
     '',
     '## 3. Search and filter',
-    '- The left panel has `Search / Filter` for payload/time search, Time Range, ID Range, and AI Search.',
+    '- The left panel has `Search / Filter` for payload/time search, Time Range, and AI Search.',
     '- In `Log AI Focus`, click the small `Search` button above the table for quick search.',
     '- `AI Search` converts a natural-language query into a local filter.',
     '',
     '## 4. AI Diagnostic Report',
     '- Choose a mode beside `Send`: `Current line`, `Range`, `All current line`, or `Bug`.',
-    '- `Range` shows a two-handle slider for the log window sent to AI and can use time or message ID.',
-    '- `Potential Bug` sends the full message context for whole-log analysis.',
+    '- `Range` shows a two-handle time slider for the log window sent to AI.',
+    '- `Potential Bug` sends the full log up to `Max AI messages`.',
     '- When `Send` is pressed, the button stays locked until AI returns a response or an error.',
-    '- The app sends only `HH:mm:ss` time and `payload` to reduce tokens.',
+    '- The app sends only message id, payload, and `system_space` documentation to reduce tokens.',
+    '- The default AI context limit is 27,000 messages. Change `Max AI messages` in `AI / RAG Config` if a provider needs a lower cap.',
     '',
     '## 5. AI prompt guidance',
     '- Click `Prompt` next to `AI Diagnostic Report` to enter response guidance.',
-    '- If the guidance is empty, the default diagnostic prompt is used.',
-    '- Example: "Answer in 4 sections, prioritize root cause, cite reproduction conditions."',
+    '- If the guidance is empty, only your chat question and the selected log context are sent.',
+    '- The row AI button only explains the clicked message unless you enter optional Row AI Prompt text.',
     '',
     '## 6. ECU docs / RAG',
     '- Click `Add ECU Docs` to load ECU/FIBEX/ARXML/TXT/DOCX documentation.',
     '- AI may use several snippets from one document, for example `8 snippets / 1 ECU document`.',
     '- `AI / RAG Config` is locked by default. Enter the team password to edit advanced settings.',
+    '- `Default AI Model` is saved and reused when the app opens again.',
     '',
     '## 7. Export data',
     '- Use `Export CSV` in Search / Filter to save currently filtered rows.',
@@ -1613,8 +1845,8 @@ async function maybeRunConfiguredAutoScan() {
   const config = await api.getAiConfig();
   state.aiConfig = config;
   if (config.autoScan && config.apiKeySet) {
-    setAiChatMode('errors');
-    setAiStatus('Potential Bug mode is selected. AI will run only when you press Send.', false);
+    setAiChatMode(DEFAULT_AI_CHAT_MODE);
+    setAiStatus('All current line mode is selected. AI will run only when you press Send.', false);
   }
 }
 
@@ -1678,7 +1910,7 @@ async function analyzeSelected() {
   await runAiAnalysis({
     title: `Analyze message ${message.id}`,
     mode: 'selected-message',
-    query: `Analyze the issue or symptom in this message and answer in the same language as the user question: ${message.level} ${message.ecu}/${message.apid}/${message.ctid} ${message.payload}`,
+    query: `Analyze selected message #${message.id} and attached payload context. Find the fault, root cause, and fault analysis.`,
     messages: context,
     selectedIds: [message.id],
     fromMs: message.timeMs,
@@ -1703,15 +1935,16 @@ async function sendAiChat(mode) {
     return;
   }
   const selectedContextId = mode === 'selection' ? state.selectedId : null;
-  const contextMessages = rawContextMessages.map((message) => (
+  const maxLogLines = getAiChatMaxLogLines(mode, rawContextMessages.length);
+  const rawMessagesForAi = limitAiContextMessagesSequential(rawContextMessages, maxLogLines);
+  const contextMessages = rawMessagesForAi.map((message) => (
     selectedContextId !== null ? toCurrentLineAiMessage(message, selectedContextId) : toAiMessage(message)
   ));
   const aiQuestion = withHiddenAiInstructions(question, mode);
-  const maxLogLines = getAiChatMaxLogLines(mode, contextMessages.length);
-  const estimatedContextMessages = Math.min(contextMessages.length, maxLogLines);
+  const estimatedContextMessages = contextMessages.length;
 
   appendChatBubble('user', question, estimatedContextMessages);
-  const pendingBubble = appendChatBubble('assistant', 'AI is analyzing the context and waiting for the full response...', estimatedContextMessages);
+  const pendingBubble = appendChatBubble('assistant', 'AI is analyzing the context and waiting for the full response...', estimatedContextMessages, null, null, { pending: true });
   el.aiChatInput.value = '';
   setAiSending(true);
   setAiStatus(`AI is processing up to ${formatNumber(estimatedContextMessages)} context messages...`, false);
@@ -1722,13 +1955,13 @@ async function sendAiChat(mode) {
       mode,
       model: el.aiRuntimeModel.value || '',
       messages: contextMessages,
-      includeSystemSpaceDocs: mode === 'selection',
+      includeSystemSpaceDocs: true,
       selectedIds: selectedContextId !== null ? [selectedContextId] : [],
-      stats: collectAiStats(mode, rawContextMessages),
+      stats: collectAiStats(mode, rawMessagesForAi),
       maxLogLines
     });
     if (!response.ok) {
-      updateChatBubble(pendingBubble, 'assistant', `AI error: ${response.error || 'AI call failed.'}`);
+      updateChatBubble(pendingBubble, 'assistant', `AI error: ${response.error || 'AI call failed.'}`, null, null, null, { scroll: 'top' });
       setAiStatus(response.error || 'AI chat failed.', true);
       return;
     }
@@ -1743,10 +1976,10 @@ async function sendAiChat(mode) {
       docs: response.promptStats?.docs || 0,
       docSources: response.promptStats?.docSources || 0
     };
-    updateChatBubble(pendingBubble, 'assistant', resultText, responseMeta.contextMessages, responseMeta.docs, responseMeta.docSources);
+    updateChatBubble(pendingBubble, 'assistant', resultText, responseMeta.contextMessages, responseMeta.docs, responseMeta.docSources, { scroll: 'top' });
     setAiStatus(`AI chat complete. Sent ${formatNumber(responseMeta.contextMessages)} messages and ${formatAiDocUsage(responseMeta)}.`, false);
   } catch (error) {
-    updateChatBubble(pendingBubble, 'assistant', `AI error: ${error.message}`);
+    updateChatBubble(pendingBubble, 'assistant', `AI error: ${error.message}`, null, null, null, { scroll: 'top' });
     setAiStatus(`AI chat error: ${error.message}`, true);
   } finally {
     setAiSending(false);
@@ -1771,7 +2004,7 @@ async function runQuickRowAi(messageId) {
   const maxLogLines = contextMessages.length;
 
   appendChatBubble('user', `Explain message #${target.id}\n${String(target.payload || '').slice(0, 260)}`, contextMessages.length);
-  const pendingBubble = appendChatBubble('assistant', `AI is explaining message #${target.id}...`, contextMessages.length);
+  const pendingBubble = appendChatBubble('assistant', `AI is explaining message #${target.id}...`, contextMessages.length, null, null, { pending: true });
 
   state.quickAiPendingId = target.id;
   setAiSending(true);
@@ -1790,7 +2023,7 @@ async function runQuickRowAi(messageId) {
       maxLogLines
     });
     if (!response.ok) {
-      updateChatBubble(pendingBubble, 'assistant', `AI error: ${response.error || 'AI call failed.'}`);
+      updateChatBubble(pendingBubble, 'assistant', `AI error: ${response.error || 'AI call failed.'}`, null, null, null, { scroll: 'top' });
       setAiStatus(response.error || 'Quick row AI failed.', true);
       return;
     }
@@ -1805,10 +2038,10 @@ async function runQuickRowAi(messageId) {
       docs: response.promptStats?.docs || 0,
       docSources: response.promptStats?.docSources || 0
     };
-    updateChatBubble(pendingBubble, 'assistant', resultText, responseMeta.contextMessages, responseMeta.docs, responseMeta.docSources);
+    updateChatBubble(pendingBubble, 'assistant', resultText, responseMeta.contextMessages, responseMeta.docs, responseMeta.docSources, { scroll: 'top' });
     setAiStatus(`AI explained message #${target.id}. Sent ${formatNumber(responseMeta.contextMessages)} nearby messages and ${formatAiDocUsage(responseMeta)}.`, false);
   } catch (error) {
-    updateChatBubble(pendingBubble, 'assistant', `AI error: ${error.message}`);
+    updateChatBubble(pendingBubble, 'assistant', `AI error: ${error.message}`, null, null, null, { scroll: 'top' });
     setAiStatus(`Quick row AI error: ${error.message}`, true);
   } finally {
     state.quickAiPendingId = null;
@@ -1817,47 +2050,98 @@ async function runQuickRowAi(messageId) {
 }
 
 function buildQuickAiContextMessages(target) {
-  return buildNeighborContextByIndex(target.id, 8, 8);
+  return target ? [target] : [];
 }
 
 function getQuickAiPrompt() {
-  return String(el.quickAiPrompt?.value || state.aiConfig?.quickAi?.prompt || DEFAULT_QUICK_AI_PROMPT).trim() || DEFAULT_QUICK_AI_PROMPT;
+  return String(el.quickAiPrompt?.value || state.aiConfig?.quickAi?.prompt || '').trim();
 }
 
 function buildQuickAiQuestion(target, prompt) {
   return [
-    prompt || DEFAULT_QUICK_AI_PROMPT,
-    '',
+    'Explain only what this single DLT log message means. Do not diagnose a fault, root cause, impact, or reproduction unless the optional user prompt explicitly asks for it.',
     `Target message id: ${target.id}`,
-    `Target time: ${formatAiClockTime(target)}`,
-    `Target level/type: ${target.level || '-'} / ${target.type || '-'}`,
-    `Target ECU/APID/CTID: ${target.ecu || '-'} / ${target.apid || '-'} / ${target.ctid || '-'}`,
     `Target payload: ${target.payload || ''}`,
-    '',
-    'Nearby context is attached below. The selected row is marked with [TARGET]. Messages before and after it are only supporting context.',
-    'Answer directly and keep the scope on the selected message.'
-  ].join('\n');
+    prompt ? `Optional user prompt:\n${prompt}` : ''
+  ].filter(Boolean).join('\n');
 }
 
 function toQuickAiMessage(message, targetId) {
-  const relation = message.id === targetId ? '[TARGET]' : (message.id < targetId ? '[BEFORE]' : '[AFTER]');
-  const meta = [
-    relation,
-    `#${message.id}`,
-    message.level || '',
-    [message.ecu, message.apid, message.ctid].filter(Boolean).join('/')
-  ].filter(Boolean).join(' ');
   return {
-    time: formatAiClockTime(message),
-    payload: `${meta} ${message.payload || ''}`.trim()
+    id: message.id,
+    payload: message.payload || ''
   };
 }
 
 function getAiChatMaxLogLines(mode, contextCount) {
+  const configuredLimit = Math.max(1, Number(state.aiConfig?.maxLogLines || DEFAULT_AI_MAX_LOG_LINES));
   if (mode === 'errors' || mode === 'filtered') {
-    return Math.max(1, Number(contextCount || 0));
+    return Math.min(Math.max(1, Number(contextCount || 0)), configuredLimit);
   }
-  return Math.max(1, Number(state.aiConfig?.maxLogLines || 1400));
+  return configuredLimit;
+}
+
+function limitAiContextMessagesSequential(messages, limit) {
+  if (!Array.isArray(messages)) return [];
+  const normalizedLimit = Math.max(1, Number(limit || DEFAULT_AI_MAX_LOG_LINES));
+  return messages.length > normalizedLimit ? messages.slice(0, normalizedLimit) : messages;
+}
+
+function reduceAiContextForSend(messages, limit, selectedId = null) {
+  if (!Array.isArray(messages) || messages.length <= limit) return messages || [];
+
+  const selected = new Map();
+  const byIndex = new Map();
+  messages.forEach((message, index) => {
+    byIndex.set(message.id, index);
+  });
+
+  function addMessage(message) {
+    if (message && Number.isFinite(Number(message.id)) && selected.size < limit) {
+      selected.set(message.id, message);
+    }
+  }
+
+  function addWindow(centerIndex, beforeCount = 2, afterCount = 2) {
+    const start = Math.max(0, centerIndex - beforeCount);
+    const end = Math.min(messages.length - 1, centerIndex + afterCount);
+    for (let index = start; index <= end && selected.size < limit; index += 1) {
+      addMessage(messages[index]);
+    }
+  }
+
+  if (Number.isFinite(Number(selectedId)) && byIndex.has(selectedId)) {
+    addWindow(byIndex.get(selectedId), 12, 12);
+  }
+
+  const priorityIndexes = [];
+  for (let index = 0; index < messages.length; index += 1) {
+    if (isPriorityAiContextMessage(messages[index])) priorityIndexes.push(index);
+  }
+
+  const priorityBudget = Math.max(1, Math.floor(limit * 0.75));
+  const priorityStep = Math.max(1, Math.floor(priorityIndexes.length / Math.max(1, Math.floor(priorityBudget / 5))));
+  for (let index = 0; index < priorityIndexes.length && selected.size < priorityBudget; index += priorityStep) {
+    addWindow(priorityIndexes[index], 2, 2);
+  }
+
+  const remaining = Math.max(0, limit - selected.size);
+  if (remaining > 0) {
+    const step = Math.max(1, Math.floor(messages.length / remaining));
+    for (let index = 0; index < messages.length && selected.size < limit; index += step) {
+      addMessage(messages[index]);
+    }
+  }
+
+  return Array.from(selected.values()).sort((a, b) => a.id - b.id).slice(0, limit);
+}
+
+function isPriorityAiContextMessage(message) {
+  if (!message) return false;
+  if (message.level === 'Fatal' || message.level === 'Error' || message.level === 'Warn') return true;
+  if (state.aiHighlights.has(message.id)) return true;
+  const payload = String(message.payload || '').toLowerCase();
+  return AI_CONTEXT_SUSPICIOUS_KEYWORDS.some((keyword) => payload.includes(keyword));
 }
 
 function resolveChatRange() {
@@ -1888,11 +2172,17 @@ function updateChatRangeInfo() {
     return;
   }
   if (state.aiChatMode === 'errors') {
-    el.aiChatRangeInfo.textContent = `${formatNumber(state.messages.length)} full-log messages`;
+    const limit = getAiChatMaxLogLines('errors', state.messages.length);
+    el.aiChatRangeInfo.textContent = limit < state.messages.length
+      ? `${formatNumber(state.messages.length)} full-log messages; AI sends ${formatNumber(limit)} selected payloads`
+      : `${formatNumber(state.messages.length)} full-log messages`;
     return;
   }
   if (state.aiChatMode === 'filtered') {
-    el.aiChatRangeInfo.textContent = `${formatNumber(state.filtered.length)} messages after current filters`;
+    const limit = getAiChatMaxLogLines('filtered', state.filtered.length);
+    el.aiChatRangeInfo.textContent = limit < state.filtered.length
+      ? `${formatNumber(state.filtered.length)} filtered messages; AI sends ${formatNumber(limit)} selected payloads`
+      : `${formatNumber(state.filtered.length)} messages after current filters`;
     return;
   }
   const range = resolveChatRange();
@@ -1939,11 +2229,7 @@ function buildChatContextMessages(mode) {
 }
 
 function buildCurrentLineContext(selected) {
-  const neighborContext = buildNeighborContextByIndex(selected.id, 12, 12);
-  const timeContext = Number.isFinite(selected.timeMs)
-    ? buildLocalContext(selected.timeMs, selected.timeMs, Math.max(2000, Number(el.aiWindow.value || 500)), 860)
-    : [];
-  return mergeMessageContext(neighborContext, timeContext, 900);
+  return buildNeighborContextByIndex(selected.id, 40, 40);
 }
 
 function buildNeighborContextByIndex(targetId, beforeCount, afterCount) {
@@ -1984,40 +2270,19 @@ function buildFilteredContextMessages(limit) {
 }
 
 function defaultChatQuestion(mode) {
-  if (mode === 'selection') {
-    return 'Analyze the current log row and nearby messages. If this is a suspected bug, answer in 4 sections: whether it is a real issue, root cause, impact, and reproduction steps.';
-  }
-  if (mode === 'range') {
-    return 'Analyze the selected log range. If this is a suspected bug, answer in 4 sections: whether it is a real issue, root cause, impact, and reproduction steps.';
-  }
-  if (mode === 'filtered') {
-    return 'Analyze all messages currently visible after the active filters. Find the most important issue and answer in 4 sections: whether it is a real issue, root cause, impact, and reproduction steps.';
-  }
-  if (mode === 'errors') {
-    return 'I suspect a potential bug. Scan the full timeline and payloads, find the most important issue, and answer in 4 sections: whether it is a real issue, root cause, impact, and reproduction steps.';
-  }
-  return 'Analyze the current log context and respond as an ECU diagnostic engineer.';
+  return '';
 }
 
 function withHiddenAiInstructions(question, mode) {
-  const range = mode === 'range' ? resolveChatRange() : null;
-  const rangeText = range
-    ? `Range: ${range.unit === 'id'
-      ? `${formatRangeValue('id', range.fromId)} -> ${formatRangeValue('id', range.toId)}`
-      : `${formatTimeLabel(range.fromMs)} -> ${formatTimeLabel(range.toMs)}`}.`
-    : '';
   const guidance = String(state.aiGuidance || '').trim();
   return [
     question,
-    guidance ? `\nUser response guidance:\n${guidance}` : '',
-    '',
-    'Hidden UI requirement: answer in the same language as the user question. If the user writes Vietnamese, answer Vietnamese. If the user writes English, answer English. Translate section titles into the answer language. Use the timeline/payload context directly. If this is a suspected bug, include concise reproduction or sequence conditions without requiring another UI action.',
-    rangeText
+    guidance ? `\nUser prompt:\n${guidance}` : ''
   ].filter(Boolean).join('\n');
 }
 
 function setAiChatMode(mode) {
-  state.aiChatMode = mode || 'selection';
+  state.aiChatMode = mode || DEFAULT_AI_CHAT_MODE;
   if (el.aiChatUseRange) {
     el.aiChatUseRange.checked = state.aiChatMode === 'range';
   }
@@ -2079,8 +2344,9 @@ function syncFilterRangeFromHiddenInputs() {
   if (Number.isFinite(fromMs) || Number.isFinite(toMs)) {
     state.filterRange.unit = 'time';
     clearRangeBounds('filter');
-    const fallbackFrom = Number.isFinite(state.firstTimeMs) ? state.firstTimeMs : fromMs;
-    const fallbackTo = Number.isFinite(state.lastTimeMs) ? state.lastTimeMs : toMs;
+    const bounds = getRangeBounds('time');
+    const fallbackFrom = bounds ? bounds.min : fromMs;
+    const fallbackTo = bounds ? bounds.max : toMs;
     setFilterRange(
       Number.isFinite(fromMs) ? fromMs : fallbackFrom,
       Number.isFinite(toMs) ? toMs : fallbackTo,
@@ -2118,7 +2384,7 @@ function resetAiRangeToFull(focus = true) {
 }
 
 function selectRangeForAi() {
-  const range = selectedRange();
+  const range = selectedTimeRange();
   if (!range) {
     setAiStatus('No row is selected for AI range.', true);
     return;
@@ -2155,9 +2421,9 @@ function syncRangeControls(kind) {
   const controls = getRangeControls(kind);
   if (!range || !controls.start || !controls.end) return;
 
-  range.unit = range.unit || 'time';
+  range.unit = 'time';
+  const bounds = getRangeBounds('time');
   syncRangeModeUi(kind);
-  const bounds = getRangeBounds(range.unit);
   if (!bounds) {
     controls.start.disabled = true;
     controls.end.disabled = true;
@@ -2198,7 +2464,8 @@ function resetRangeToFull(kind) {
   const range = getRangeState(kind);
   if (!range) return false;
   range.dirty = false;
-  const bounds = getRangeBounds(range.unit || 'time');
+  range.unit = 'time';
+  const bounds = getRangeBounds('time');
   if (!bounds) {
     range.from = null;
     range.to = null;
@@ -2212,7 +2479,7 @@ function resetRangeToFull(kind) {
 function setRangeValues(kind, from, to, dirty) {
   const range = getRangeState(kind);
   if (!range || !Number.isFinite(from) || !Number.isFinite(to)) return;
-  range.unit = range.unit || 'time';
+  range.unit = 'time';
   const bounds = getRangeBounds(range.unit) || {
     min: Math.min(from, to),
     max: Math.max(from, to)
@@ -2262,31 +2529,7 @@ function applyRangeValues(kind) {
 function toggleRangeUnit(kind) {
   const range = getRangeState(kind);
   if (!range) return;
-  const previousUnit = range.unit || 'time';
-  const nextUnit = previousUnit === 'time' ? 'id' : 'time';
-  const previous = {
-    from: range.from,
-    to: range.to,
-    dirty: range.dirty
-  };
-  range.unit = nextUnit;
-  clearRangeBounds(kind);
-
-  const bounds = getRangeBounds(nextUnit);
-  if (!bounds) {
-    range.from = null;
-    range.to = null;
-    range.dirty = false;
-    syncRangeControls(kind);
-    return;
-  }
-
-  const converted = previous.dirty
-    ? convertRangeValues(previousUnit, nextUnit, previous.from, previous.to, bounds)
-    : bounds;
-  range.from = converted.from;
-  range.to = converted.to;
-  range.dirty = previous.dirty;
+  range.unit = 'time';
   syncRangeControls(kind);
 }
 
@@ -2315,9 +2558,9 @@ function convertRangeValues(fromUnit, toUnit, from, to, fallbackBounds) {
 
   if (fromUnit === 'time' && toUnit === 'id') {
     const selected = state.messages.filter((message) => (
-      Number.isFinite(message.timeMs) &&
-      message.timeMs >= start &&
-      message.timeMs <= end
+      Number.isFinite(getMessageRangeTimeMs(message)) &&
+      getMessageRangeTimeMs(message) >= start &&
+      getMessageRangeTimeMs(message) <= end
     ));
     if (selected.length) {
       return {
@@ -2331,12 +2574,12 @@ function convertRangeValues(fromUnit, toUnit, from, to, fallbackBounds) {
     const selected = state.messages.filter((message) => (
       Number(message.id) >= start &&
       Number(message.id) <= end &&
-      Number.isFinite(message.timeMs)
+      Number.isFinite(getMessageRangeTimeMs(message))
     ));
     if (selected.length) {
       return {
-        from: selected[0].timeMs,
-        to: selected[selected.length - 1].timeMs
+        from: getMessageRangeTimeMs(selected[0]),
+        to: getMessageRangeTimeMs(selected[selected.length - 1])
       };
     }
   }
@@ -2387,9 +2630,11 @@ function getRangeBounds(unit) {
     if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
     return { min, max };
   }
-  if (!Number.isFinite(state.firstTimeMs) || !Number.isFinite(state.lastTimeMs)) return null;
-  const min = state.firstTimeMs;
-  const max = Math.max(min, state.lastTimeMs);
+  const values = state.messages.map(getMessageRangeTimeMs).filter(Number.isFinite);
+  if (!values.length) return null;
+  const min = Math.min(...values);
+  let max = Math.max(...values);
+  if (max <= min) max = min + SYNTHETIC_RANGE_STEP_MS;
   return { min, max };
 }
 
@@ -2399,20 +2644,21 @@ function syncRangeModeUi(kind) {
   if (!range || !controls.title || !controls.button) return;
   const unit = range.unit || 'time';
   controls.title.textContent = kind === 'filter'
-    ? (unit === 'id' ? 'ID Range' : 'Time Range')
-    : (unit === 'id' ? 'AI ID range' : 'AI time range');
-  controls.button.textContent = unit === 'id' ? 'Use Time' : 'Use ID';
-  controls.button.classList.toggle('active', unit === 'id');
+    ? 'Time Range'
+    : 'AI time range';
+  controls.button.textContent = 'Time';
+  controls.button.classList.add('hidden');
+  controls.button.classList.remove('active');
 }
 
 function formatRangeValue(unit, value) {
   if (!Number.isFinite(value)) return '-';
-  return unit === 'id' ? `#${Math.round(value)}` : formatTimeLabel(value);
+  return unit === 'id' ? `#${Math.round(value)}` : formatRangeClockLabel(value);
 }
 
 function formatRangeShortValue(unit, value) {
   if (!Number.isFinite(value)) return '-';
-  return unit === 'id' ? `#${Math.round(value)}` : formatHourTick(value);
+  return unit === 'id' ? `#${Math.round(value)}` : formatRangeClockLabel(value);
 }
 
 function getRangeStep(unit, span) {
@@ -2430,7 +2676,10 @@ function getTimeRangeStep(spanMs) {
 function messagesInRange(fromMs, toMs) {
   const start = Math.min(fromMs, toMs);
   const end = Math.max(fromMs, toMs);
-  return state.messages.filter((message) => Number.isFinite(message.timeMs) && message.timeMs >= start && message.timeMs <= end);
+  return state.messages.filter((message) => {
+    const value = getMessageRangeTimeMs(message);
+    return Number.isFinite(value) && value >= start && value <= end;
+  });
 }
 
 function messagesInIdRange(fromId, toId) {
@@ -2444,7 +2693,8 @@ function countMessagesInRange(fromMs, toMs) {
   const start = Math.min(fromMs, toMs);
   const end = Math.max(fromMs, toMs);
   for (const message of state.messages) {
-    if (Number.isFinite(message.timeMs) && message.timeMs >= start && message.timeMs <= end) count += 1;
+    const value = getMessageRangeTimeMs(message);
+    if (Number.isFinite(value) && value >= start && value <= end) count += 1;
   }
   return count;
 }
@@ -2461,22 +2711,15 @@ function countMessagesInIdRange(fromId, toId) {
 
 function toAiMessage(message) {
   return {
-    time: formatAiClockTime(message),
+    id: message.id,
     payload: message.payload || ''
   };
 }
 
 function toCurrentLineAiMessage(message, selectedId) {
-  const relation = message.id === selectedId ? '[CURRENT LINE]' : (message.id < selectedId ? '[BEFORE]' : '[AFTER]');
-  const meta = [
-    relation,
-    `#${message.id}`,
-    message.level || '',
-    [message.ecu, message.apid, message.ctid].filter(Boolean).join('/')
-  ].filter(Boolean).join(' ');
   return {
-    time: formatAiClockTime(message),
-    payload: `${meta} ${message.payload || ''}`.trim()
+    id: message.id,
+    payload: message.payload || ''
   };
 }
 
@@ -2488,27 +2731,44 @@ function formatAiClockTime(message) {
   return raw || '-';
 }
 
-function appendChatBubble(role, text, contextCount = null, docCount = null, docSourceCount = null) {
+function appendChatBubble(role, text, contextCount = null, docCount = null, docSourceCount = null, options = {}) {
   const bubble = document.createElement('div');
   bubble.className = `chat-bubble ${role}`;
-  updateChatBubble(bubble, role, text, contextCount, docCount, docSourceCount);
+  updateChatBubble(bubble, role, text, contextCount, docCount, docSourceCount, { ...options, scroll: 'none' });
   el.aiChatLog.appendChild(bubble);
-  el.aiChatLog.scrollTop = el.aiChatLog.scrollHeight;
+  if (options.scroll === 'top') {
+    scrollChatBubbleToTop(bubble);
+  } else if (options.scroll !== 'none') {
+    el.aiChatLog.scrollTop = el.aiChatLog.scrollHeight;
+  }
   return bubble;
 }
 
-function updateChatBubble(bubble, role, text, contextCount = null, docCount = null, docSourceCount = null) {
+function updateChatBubble(bubble, role, text, contextCount = null, docCount = null, docSourceCount = null, options = {}) {
   if (!bubble) return;
-  bubble.className = `chat-bubble ${role}`;
+  bubble.className = `chat-bubble ${role}${options.pending ? ' pending' : ''}`;
   const meta = [];
   if (contextCount !== null) meta.push(`${formatNumber(contextCount)} log messages`);
   if (docCount !== null) meta.push(formatAiDocUsage({ docs: docCount, docSources: docSourceCount }));
+  const body = options.pending
+    ? `<p class="typing-indicator" aria-label="${escapeHtml(String(text || 'AI is thinking'))}"><span></span><span></span><span></span></p>`
+    : `<p>${escapeHtml(String(text || '')).replace(/\n/g, '<br>')}</p>`;
   bubble.innerHTML = `
     <strong>${role === 'user' ? 'You' : 'AI'}</strong>
     ${meta.length ? `<span class="chat-meta">${escapeHtml(meta.join(' | '))}</span>` : ''}
-    <p>${escapeHtml(String(text || '')).replace(/\n/g, '<br>')}</p>
+    ${body}
   `;
-  el.aiChatLog.scrollTop = el.aiChatLog.scrollHeight;
+  if (options.scroll === 'top') {
+    requestAnimationFrame(() => scrollChatBubbleToTop(bubble));
+  } else if (options.scroll === 'bottom') {
+    el.aiChatLog.scrollTop = el.aiChatLog.scrollHeight;
+  }
+}
+
+function scrollChatBubbleToTop(bubble) {
+  if (!bubble || !el.aiChatLog) return;
+  const top = Math.max(0, bubble.offsetTop - el.aiChatLog.offsetTop - 6);
+  el.aiChatLog.scrollTop = top;
 }
 
 function formatAiDocUsage(meta = {}) {
@@ -3215,7 +3475,15 @@ function buildLocalContext(fromMs, toMs, windowMs, maxLines) {
 function selectedRange() {
   const message = getSelectedMessage();
   if (!message) return null;
-  return { fromMs: message.timeMs, toMs: message.timeMs };
+  const value = Number.isFinite(message.timeMs) ? message.timeMs : getMessageRangeTimeMs(message);
+  return Number.isFinite(value) ? { fromMs: value, toMs: value } : null;
+}
+
+function selectedTimeRange() {
+  const message = getSelectedMessage();
+  if (!message) return null;
+  const value = getMessageRangeTimeMs(message);
+  return Number.isFinite(value) ? { fromMs: value, toMs: value } : null;
 }
 
 function resolveTimeInput(value, allowId) {
@@ -3225,19 +3493,31 @@ function resolveTimeInput(value, allowId) {
   const idMatch = raw.match(/^#?(\d+)$/);
   if (allowId && idMatch) {
     const byId = state.messages.find((message) => message.id === Number(idMatch[1]));
-    if (byId) return byId.timeMs;
+    if (byId) return getMessageRangeTimeMs(byId);
+  }
+
+  const clockMs = parseClockTimeOfDayMs(raw);
+  if (Number.isFinite(clockMs)) {
+    return resolveClockInputToRangeTime(clockMs);
   }
 
   const numeric = Number(raw);
   if (Number.isFinite(numeric)) {
-    if (state.firstTimeMs !== null && numeric >= 0 && numeric < 24 * 60 * 60 * 1000) {
-      return state.firstTimeMs + numeric;
-    }
     return numeric;
   }
 
   const parsed = Date.parse(raw.replace(/\//g, '-'));
-  return Number.isFinite(parsed) ? parsed : NaN;
+  if (!Number.isFinite(parsed)) return NaN;
+  return resolveClockInputToRangeTime(parseClockTimeOfDayMs(new Date(parsed).toISOString()));
+}
+
+function resolveClockInputToRangeTime(clockMs) {
+  const bounds = getRangeBounds('time');
+  if (!bounds) return clockMs;
+  let value = clockMs;
+  while (value < bounds.min && value + DAY_MS <= bounds.max) value += DAY_MS;
+  while (value > bounds.max && value - DAY_MS >= bounds.min) value -= DAY_MS;
+  return clampNumber(value, bounds.min, bounds.max);
 }
 
 async function exportFiltered(kind) {
@@ -3371,8 +3651,8 @@ function collectAiStats(mode, contextMessages) {
     selectedId: state.selectedId,
     selectedRange: range ? {
       unit: range.unit,
-      from: range.unit === 'id' ? formatRangeValue('id', range.fromId) : formatTimeLabel(range.fromMs),
-      to: range.unit === 'id' ? formatRangeValue('id', range.toId) : formatTimeLabel(range.toMs)
+      from: range.unit === 'id' ? formatRangeValue('id', range.fromId) : formatRangeClockLabel(range.fromMs),
+      to: range.unit === 'id' ? formatRangeValue('id', range.toId) : formatRangeClockLabel(range.toMs)
     } : null,
     levels
   };
@@ -3401,7 +3681,7 @@ function clearData() {
   state.lastTimeMs = null;
   state.currentPage = 1;
   state.parseDone = false;
-  state.aiChatMode = 'selection';
+  state.aiChatMode = DEFAULT_AI_CHAT_MODE;
   state.quickAiPendingId = null;
   state.aiRange = {
     unit: 'time',
@@ -3526,6 +3806,35 @@ function formatMinuteTick(ms) {
 function formatHourMinuteSecond(ms) {
   if (!Number.isFinite(ms)) return '-';
   return new Date(ms).toISOString().slice(11, 19);
+}
+
+function formatRangeClockLabel(ms) {
+  if (!Number.isFinite(ms)) return '-';
+  const value = ((Math.floor(ms) % DAY_MS) + DAY_MS) % DAY_MS;
+  const totalSeconds = Math.floor(value / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+function parseClockTimeOfDayMs(value) {
+  const raw = String(value || '');
+  const match = raw.match(/\b(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?\b/);
+  if (!match) return NaN;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  const seconds = Number(match[3]);
+  if (hours > 23 || minutes > 59 || seconds > 59) return NaN;
+  const fraction = String(match[4] || '').padEnd(3, '0').slice(0, 3);
+  const millis = Number(fraction || 0);
+  return ((hours * 60 + minutes) * 60 + seconds) * 1000 + millis;
+}
+
+function getMessageRangeTimeMs(message) {
+  if (Number.isFinite(message?.rangeTimeMs)) return message.rangeTimeMs;
+  if (Number.isFinite(message?.timeMs)) return message.timeMs;
+  return NaN;
 }
 
 function clampNumber(value, min, max) {

@@ -128,8 +128,7 @@ Panel bên trái:
 
 - Ô search `Search payload or time... (F)` để tìm nhanh.
 - `AI Search`: nhập câu hỏi tự nhiên và để AI chuyển thành filter plan local.
-- `Time Range`: slider 2 đầu để giới hạn view theo khoảng thời gian.
-  - Bấm `Use ID` để đổi đơn vị từ `Time` sang `ID`.
+- `Time Range`: slider 2 đầu để giới hạn view theo `HH:mm:ss`.
   - Bấm `Full Log` để reset về toàn bộ log.
 - `Export CSV`: xuất các dòng đang hiển thị (sau khi áp dụng search + range + AI Search filter).
 
@@ -162,11 +161,12 @@ Tính năng liên quan:
 
 Panel `AI / RAG Config` bị khóa mặc định và gồm:
 - Base URL
-- Model
+- Default AI Model dropdown (lưu lại cho lần mở app sau)
 - API key
 - Extra headers JSON
 - `Suggest context after opening logs`
 - Context window (ms)
+- Max AI messages (default 27,000)
 
 ## Download Guide
 

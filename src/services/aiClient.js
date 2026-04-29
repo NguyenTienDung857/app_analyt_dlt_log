@@ -179,21 +179,22 @@ class AiClient {
   }
 
   async chat(payload) {
+    const messages = [
+      payload.systemPrompt ? { role: 'system', content: payload.systemPrompt } : null,
+      { role: 'user', content: payload.userPrompt }
+    ].filter(Boolean);
     return this.sendChatCompletion({
       model: this.config.model,
-      messages: [
-        { role: 'system', content: payload.systemPrompt },
-        { role: 'user', content: payload.userPrompt }
-      ],
+      messages,
       temperature: 0.2
     }, { parseJson: false });
   }
 
   async completeStructured(payload, schema, schemaName) {
     const messages = [
-      { role: 'system', content: payload.systemPrompt },
+      payload.systemPrompt ? { role: 'system', content: payload.systemPrompt } : null,
       { role: 'user', content: payload.userPrompt }
-    ];
+    ].filter(Boolean);
 
     const body = {
       model: this.config.model,

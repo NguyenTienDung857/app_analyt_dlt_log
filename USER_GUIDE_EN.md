@@ -108,11 +108,10 @@ What happens:
 Tip:
 - Short, specific English terms usually work best for filtering.
 
-### 6.3 Time / ID Range Filter
+### 6.3 Time Range Filter
 
-Use the `Time Range` panel (two-handle slider) to restrict the visible logs to a window.
+Use the `Time Range` panel (two-handle slider) to restrict the visible logs to a `HH:mm:ss` window.
 
-- Use `Use ID` to toggle the unit between `Time` and `Message ID`.
 - Use `Full Log` to reset the filter back to the entire log.
 
 This filter affects:
@@ -157,17 +156,15 @@ While AI is running, `Send` stays locked until the response returns or errors.
 Available modes are:
 
 - `Current line`: analyze the selected row with nearby context
-- `Range`: analyze only the window defined by the AI range slider (time or ID)
+- `Range`: analyze only the window defined by the AI time slider
 - `Filtered`: analyze the currently filtered view (context-reduced)
 - `Bug`: whole-log style prompt focused on finding the most important suspicious issue
 
 ### 8.3 AI Range Slider (Mode: Range)
 
-When you select `Range`, you can use a two-handle slider to choose:
+When you select `Range`, you can use a two-handle `HH:mm:ss` slider to choose:
 
 - `From` and `To` boundaries
-- Units: time or message ID (`Use ID`)
-
 Use `Full Log` to reset the AI range back to the full log bounds.
 
 ### 8.4 Runtime Model Selection
@@ -182,7 +179,7 @@ Use the model dropdown near the report header to pick the model per request:
 Click `Prompt` to open the guidance panel and add optional instructions, such as:
 
 - `Answer in 4 sections: verification, root cause, impact, next steps`
-- `Cite evidence using time and payload`
+- `Cite evidence using message id and payload`
 - `Be concise and propose a test bench reproduction`
 
 Guidance is stored locally and applied to subsequent requests.
@@ -191,7 +188,8 @@ Guidance is stored locally and applied to subsequent requests.
 
 To keep token usage controlled, the app sends a reduced context view:
 
-- Log context is primarily `time` and `payload` for selected rows/windows
+- Log context is primarily message id and payload for selected rows/windows
+- The default AI context limit is 27,000 messages and can be changed in `AI / RAG Config`
 - Relevant ECU docs are retrieved locally (RAG) and attached as snippets
 
 If you need extra evidence, expand your range window or widen the visible filter context and resend.
@@ -203,11 +201,12 @@ The `AI / RAG Config` panel is locked by default.
 It contains:
 
 - Base URL (proxy-compatible OpenAI-style endpoint)
-- Model
+- Default AI Model dropdown. The saved model is reused the next time the app opens.
 - API key
 - Extra headers JSON
 - `Suggest context after opening logs` toggle
 - Context window size (ms)
+- Max AI messages
 
 After enabling `Suggest context after opening logs`, the app selects a bug-focused mode after parsing, but it will not run AI automatically; you still press `Send`.
 
