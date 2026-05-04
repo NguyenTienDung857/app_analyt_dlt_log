@@ -52,7 +52,7 @@ async function parseFiles(files) {
       fileIndex,
       startIndex: nextIndex,
       onChunk: (messages) => {
-        parentPort.postMessage({ type: 'chunk', fileIndex, messages });
+        parentPort.postMessage({ type: 'chunk', fileIndex, messages: compactChunkForRenderer(messages) });
       },
       onProgress: (progress) => {
         parentPort.postMessage({ type: 'progress', ...progress });
@@ -84,5 +84,38 @@ async function parseFiles(files) {
     totalMessages: nextIndex,
     files: fileSummaries,
     parseMs: Date.now() - startedAt
+  });
+}
+
+function compactChunkForRenderer(messages) {
+  return messages.map((message) => {
+    const compact = {
+      id: message.id,
+      fileName: message.fileName,
+      filePath: message.filePath,
+      fileIndex: message.fileIndex,
+      time: message.time,
+      timeMs: message.timeMs,
+      deltaMs: message.deltaMs,
+      dltTimestamp: message.dltTimestamp,
+      level: message.level,
+      type: message.type,
+      subtype: message.subtype,
+      ecu: message.ecu,
+      apid: message.apid,
+      ctid: message.ctid,
+      length: message.length,
+      payloadLength: message.payloadLength,
+      payload: message.payload,
+      messageId: message.messageId,
+      nonVerbose: message.nonVerbose,
+      decodeStatus: message.decodeStatus
+    };
+
+    if (message.payloadAscii && message.payloadAscii !== message.payload) {
+      compact.payloadAscii = message.payloadAscii;
+    }
+
+    return compact;
   });
 }

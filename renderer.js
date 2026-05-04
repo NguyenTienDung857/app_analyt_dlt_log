@@ -12,6 +12,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const SYNTHETIC_RANGE_STEP_MS = 1000;
 const DEFAULT_LOG_COLUMNS = [66, 108, 76, 640];
 const MIN_LOG_COLUMNS = [42, 72, 52, 180];
+const STAR_ANIMATION_FRAME_MS = 80;
+const BG_STAR_COUNT = 90;
+const FALLING_STAR_COUNT = 10;
 const DEFAULT_RUNTIME_MODEL = 'gpt-5.3-codex-xhigh';
 const DEFAULT_QUICK_AI_MODEL = DEFAULT_RUNTIME_MODEL;
 const DEFAULT_AI_CHAT_MODE = 'filtered';
@@ -666,6 +669,9 @@ function submitAiConfigPassword() {
   el.aiConfigPassword.value = '';
   el.aiConfigLockState.textContent = 'Unlocked';
   setAiStatus('AI / RAG config unlocked.', false);
+  refreshAiModelOptions().catch(() => {
+    // Fallback options are already loaded; provider lookup failure should not block the UI.
+  });
 }
 
 function handleParseEvent(event) {
@@ -811,7 +817,6 @@ function appendMessages(messages) {
     } else {
       message.relTimeMs = message.id;
     }
-    message.searchBlob = buildSearchBlob(message);
     state.messages.push(message);
   }
   updateRelativeTimes();
@@ -860,16 +865,24 @@ function buildClockTimeAxisValues() {
 }
 
 function hasUsableAxisSpan(values) {
-  const finite = values.filter(Number.isFinite);
-  if (finite.length < 2) return false;
-  return Math.max(...finite) > Math.min(...finite);
+  let count = 0;
+  let min = Infinity;
+  let max = -Infinity;
+  for (const value of values) {
+    if (!Number.isFinite(value)) continue;
+    count += 1;
+    if (value < min) min = value;
+    if (value > max) max = value;
+  }
+  return count >= 2 && max > min;
 }
 
 function fillAxisGaps(values) {
   const result = values.slice();
-  const finiteIndexes = result
-    .map((value, index) => (Number.isFinite(value) ? index : -1))
-    .filter((index) => index >= 0);
+  const finiteIndexes = [];
+  for (let index = 0; index < result.length; index += 1) {
+    if (Number.isFinite(result[index])) finiteIndexes.push(index);
+  }
   if (!finiteIndexes.length) {
     return state.messages.map((_, index) => index * SYNTHETIC_RANGE_STEP_MS);
   }
@@ -980,21 +993,6 @@ function messageWithinFilterRange(message, range) {
   return value >= range.from && value <= range.to;
 }
 
-function buildSearchBlob(message) {
-  return [
-    message.payload,
-    message.level,
-    message.type,
-    message.subtype,
-    message.ecu,
-    message.apid,
-    message.ctid,
-    message.fileName,
-    message.messageId,
-    message.time
-  ].join(' ');
-}
-
 function hasActiveFilters() {
   return Boolean(
     el.searchInput.value.trim() ||
@@ -1044,17 +1042,21 @@ function renderAll() {
 
 function renderStats() {
   const messages = state.messages;
-  const filteredMessages = state.filtered.map((index) => messages[index]);
-  const errors = messages.filter((message) => message.level === 'Error' || message.level === 'Fatal').length;
-  const warns = messages.filter((message) => message.level === 'Warn').length;
-  const ecuCount = new Set(messages.map((message) => message.ecu).filter(Boolean)).size;
+  let errors = 0;
+  let warns = 0;
+  const ecus = new Set();
+  for (const message of messages) {
+    if (message.level === 'Error' || message.level === 'Fatal') errors += 1;
+    else if (message.level === 'Warn') warns += 1;
+    if (message.ecu) ecus.add(message.ecu);
+  }
   const spanMs = state.firstTimeMs !== null && state.lastTimeMs !== null ? state.lastTimeMs - state.firstTimeMs : 0;
 
   el.statTotal.textContent = formatNumber(messages.length);
-  el.statFiltered.textContent = formatNumber(filteredMessages.length);
+  el.statFiltered.textContent = formatNumber(state.filtered.length);
   el.statErrors.textContent = formatNumber(errors);
   el.statWarns.textContent = formatNumber(warns);
-  el.statEcu.textContent = formatNumber(ecuCount);
+  el.statEcu.textContent = formatNumber(ecus.size);
   el.statSpan.textContent = spanMs ? formatDuration(spanMs) : '-';
 }
 
@@ -1355,21 +1357,30 @@ function renderTimeline() {
   ctx.fillStyle = 'rgba(255,255,255,0.035)';
   ctx.fillRect(0, 0, width, height);
 
-  const messages = state.filtered.map((index) => state.messages[index]).filter((message) => Number.isFinite(message.timeMs));
-  if (!messages.length) {
+  let min = Infinity;
+  let max = -Infinity;
+  let finiteCount = 0;
+  for (const index of state.filtered) {
+    const timeMs = state.messages[index]?.timeMs;
+    if (!Number.isFinite(timeMs)) continue;
+    finiteCount += 1;
+    if (timeMs < min) min = timeMs;
+    if (timeMs > max) max = timeMs;
+  }
+  if (!finiteCount) {
     el.timelineLabel.textContent = '';
     return;
   }
 
-  const min = Math.min(...messages.map((message) => message.timeMs));
-  const max = Math.max(...messages.map((message) => message.timeMs));
   const span = Math.max(1, max - min);
   const bins = Array.from({ length: Math.max(20, Math.floor(width / 5)) }, () => ({ normal: 0, warn: 0, error: 0, ai: 0 }));
   const top = 16;
   const bottom = height - 24;
   const plotHeight = Math.max(20, bottom - top);
 
-  for (const message of messages) {
+  for (const index of state.filtered) {
+    const message = state.messages[index];
+    if (!Number.isFinite(message?.timeMs)) continue;
     const bin = Math.min(bins.length - 1, Math.floor(((message.timeMs - min) / span) * bins.length));
     if (state.aiHighlights.has(message.id)) bins[bin].ai += 1;
     else if (message.level === 'Fatal' || message.level === 'Error') bins[bin].error += 1;
@@ -1377,7 +1388,10 @@ function renderTimeline() {
     else bins[bin].normal += 1;
   }
 
-  const maxCount = Math.max(1, ...bins.map((bin) => bin.normal + bin.warn + bin.error + bin.ai));
+  let maxCount = 1;
+  for (const bin of bins) {
+    maxCount = Math.max(maxCount, bin.normal + bin.warn + bin.error + bin.ai);
+  }
   const barWidth = width / bins.length;
   drawMinuteTicks(ctx, min, max, width, height, top, bottom);
   bins.forEach((bin, index) => {
@@ -1502,11 +1516,28 @@ async function loadAiConfig() {
   el.quickAiKey.placeholder = quickAi.apiKeySet
     ? `Saved ${quickAi.apiKeyPreview}`
     : (state.aiConfig.apiKeySet ? 'Uses main AI key' : 'Paste API key');
-  await refreshAiModelOptions({
+  applyFallbackAiModelOptions({
     model: state.aiConfig.model || DEFAULT_RUNTIME_MODEL,
     runtimeModel: el.aiRuntimeModel?.value || '',
     quickModel: quickAi.model || DEFAULT_QUICK_AI_MODEL
   });
+}
+
+function applyFallbackAiModelOptions(selection = {}) {
+  const modelSelection = selection.model || el.aiModel?.value || state.aiConfig?.model || DEFAULT_RUNTIME_MODEL;
+  const runtimeSelection = Object.prototype.hasOwnProperty.call(selection, 'runtimeModel')
+    ? selection.runtimeModel
+    : (el.aiRuntimeModel?.value || '');
+  const quickSelection = selection.quickModel || el.quickAiModel?.value || state.aiConfig?.quickAi?.model || DEFAULT_QUICK_AI_MODEL;
+  const mainBaseUrl = el.aiBaseUrl?.value || state.aiConfig?.baseUrl || '';
+  const quickBaseUrl = el.quickAiBaseUrl?.value || state.aiConfig?.quickAi?.baseUrl || mainBaseUrl;
+
+  setModelSelectOptions(el.aiModel, fallbackModelOptions(mainBaseUrl, [modelSelection, runtimeSelection, DEFAULT_RUNTIME_MODEL]));
+  setModelSelectOptions(el.aiRuntimeModel, fallbackModelOptions(mainBaseUrl, [modelSelection, runtimeSelection, DEFAULT_RUNTIME_MODEL]), { includeConfigDefault: true });
+  setModelSelectOptions(el.quickAiModel, fallbackModelOptions(quickBaseUrl, [quickSelection, DEFAULT_QUICK_AI_MODEL]));
+  setConfiguredModelSelection(modelSelection);
+  setRuntimeModelSelection(runtimeSelection);
+  setQuickAiModelSelection(quickSelection);
 }
 
 function setConfiguredModelSelection(model) {
@@ -2637,29 +2668,36 @@ function convertRangeValues(fromUnit, toUnit, from, to, fallbackBounds) {
   const end = Math.max(from, to);
 
   if (fromUnit === 'time' && toUnit === 'id') {
-    const selected = state.messages.filter((message) => (
-      Number.isFinite(getMessageRangeTimeMs(message)) &&
-      getMessageRangeTimeMs(message) >= start &&
-      getMessageRangeTimeMs(message) <= end
-    ));
-    if (selected.length) {
+    let first = null;
+    let last = null;
+    for (const message of state.messages) {
+      const value = getMessageRangeTimeMs(message);
+      if (!Number.isFinite(value) || value < start || value > end) continue;
+      if (!first) first = message;
+      last = message;
+    }
+    if (first && last) {
       return {
-        from: selected[0].id,
-        to: selected[selected.length - 1].id
+        from: first.id,
+        to: last.id
       };
     }
   }
 
   if (fromUnit === 'id' && toUnit === 'time') {
-    const selected = state.messages.filter((message) => (
-      Number(message.id) >= start &&
-      Number(message.id) <= end &&
-      Number.isFinite(getMessageRangeTimeMs(message))
-    ));
-    if (selected.length) {
+    let first = null;
+    let last = null;
+    for (const message of state.messages) {
+      if (Number(message.id) < start || Number(message.id) > end) continue;
+      const value = getMessageRangeTimeMs(message);
+      if (!Number.isFinite(value)) continue;
+      if (!first) first = message;
+      last = message;
+    }
+    if (first && last) {
       return {
-        from: getMessageRangeTimeMs(selected[0]),
-        to: getMessageRangeTimeMs(selected[selected.length - 1])
+        from: getMessageRangeTimeMs(first),
+        to: getMessageRangeTimeMs(last)
       };
     }
   }
@@ -2710,10 +2748,15 @@ function getRangeBounds(unit) {
     if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
     return { min, max };
   }
-  const values = state.messages.map(getMessageRangeTimeMs).filter(Number.isFinite);
-  if (!values.length) return null;
-  const min = Math.min(...values);
-  let max = Math.max(...values);
+  let min = Infinity;
+  let max = -Infinity;
+  for (const message of state.messages) {
+    const value = getMessageRangeTimeMs(message);
+    if (!Number.isFinite(value)) continue;
+    if (value < min) min = value;
+    if (value > max) max = value;
+  }
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
   if (max <= min) max = min + SYNTHETIC_RANGE_STEP_MS;
   return { min, max };
 }
@@ -3633,13 +3676,28 @@ function csvCell(value) {
 function handleTimelineClick(event) {
   const rect = el.timeline.getBoundingClientRect();
   const ratio = (event.clientX - rect.left) / rect.width;
-  const messages = state.filtered.map((index) => state.messages[index]).filter((message) => Number.isFinite(message.timeMs));
-  if (!messages.length) return;
-  const min = Math.min(...messages.map((message) => message.timeMs));
-  const max = Math.max(...messages.map((message) => message.timeMs));
+  let min = Infinity;
+  let max = -Infinity;
+  for (const index of state.filtered) {
+    const timeMs = state.messages[index]?.timeMs;
+    if (!Number.isFinite(timeMs)) continue;
+    if (timeMs < min) min = timeMs;
+    if (timeMs > max) max = timeMs;
+  }
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return;
   const target = min + ratio * (max - min);
-  const nearest = messages.reduce((best, message) => Math.abs(message.timeMs - target) < Math.abs(best.timeMs - target) ? message : best, messages[0]);
-  selectMessage(nearest.id, true);
+  let nearest = null;
+  let nearestDistance = Infinity;
+  for (const index of state.filtered) {
+    const message = state.messages[index];
+    if (!Number.isFinite(message?.timeMs)) continue;
+    const distance = Math.abs(message.timeMs - target);
+    if (distance < nearestDistance) {
+      nearest = message;
+      nearestDistance = distance;
+    }
+  }
+  if (nearest) selectMessage(nearest.id, true);
 }
 
 function handleMinimapClick(event) {
@@ -3978,6 +4036,7 @@ function initStarsCanvas() {
   const shootingStars = [];
   let rafId = null;
   let lastTime = 0;
+  let lastDrawTime = 0;
   let shootingTimer = 0;
   let nextShootingIn = randomShootingInterval();
 
@@ -4095,6 +4154,8 @@ function initStarsCanvas() {
 
   function frame(timestamp) {
     rafId = requestAnimationFrame(frame);
+    if (timestamp - lastDrawTime < STAR_ANIMATION_FRAME_MS) return;
+    lastDrawTime = timestamp;
     const dt = Math.min(timestamp - lastTime, 50);
     lastTime = timestamp;
     ctx.clearRect(0, 0, W, H);
@@ -4115,8 +4176,8 @@ function initStarsCanvas() {
     if (!parent) return;
     W = canvas.width = parent.offsetWidth;
     H = canvas.height = parent.offsetHeight;
-    bgStars = buildBgStars(220);
-    fallingStars = buildFallingStars(28);
+    bgStars = buildBgStars(BG_STAR_COUNT);
+    fallingStars = buildFallingStars(FALLING_STAR_COUNT);
   }
 
   resize();

@@ -52,6 +52,11 @@ let parseWorker = null;
 let ragStore = null;
 let autoUpdaterStarted = false;
 
+// Large log tables and animated canvases can trigger very high Chromium GPU
+// memory on some Windows drivers. Software compositing is slower but keeps the
+// desktop app responsive and avoids multi-GB GPU child processes.
+app.disableHardwareAcceleration();
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1540,
