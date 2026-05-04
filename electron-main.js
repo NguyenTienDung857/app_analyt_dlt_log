@@ -8,6 +8,7 @@ const { AiClient, hasUsableAiConfig } = require('./src/services/aiClient');
 const { buildAnalysisPayload, buildChatPayload, buildNaturalSearchPayload, buildSequencePayload, buildScriptPayload } = require('./src/services/contextBuilder');
 const { RagStore } = require('./src/services/ragStore');
 const { writeExportFile } = require('./src/services/exporter');
+const { decryptEncArchive } = require('./src/services/encDecryptor');
 
 const APP_ROOT = __dirname;
 const UPDATE_CHECK_DELAY_MS = 5000;
@@ -325,6 +326,69 @@ function stopParseWorker() {
   }
 }
 
+function isEncryptedLogFile(filePath) {
+  return path.extname(filePath || '').toLowerCase() === '.enc';
+}
+
+async function prepareFilesForParsing(filePaths) {
+  const preparedFiles = [];
+
+  for (const filePath of filePaths) {
+    if (!isEncryptedLogFile(filePath)) {
+      preparedFiles.push(filePath);
+      continue;
+    }
+
+    const decryptedFiles = await decryptAndSelectLogFiles(filePath);
+    if (!decryptedFiles.length) {
+      return {
+        ok: false,
+        canceled: true,
+        error: 'ENC decrypted successfully, but no DLT file was selected.'
+      };
+    }
+    preparedFiles.push(...decryptedFiles);
+  }
+
+  return { ok: true, files: preparedFiles };
+}
+
+async function decryptAndSelectLogFiles(encPath) {
+  const fileName = path.basename(encPath);
+  sendParseEvent({ type: 'decrypt-start', fileName, filePath: encPath });
+
+  const decrypted = await decryptEncArchive({
+    inputPath: encPath,
+    appRoot: APP_ROOT,
+    outputRoot: path.dirname(encPath)
+  });
+
+  sendParseEvent({
+    type: 'decrypt-done',
+    fileName,
+    filePath: encPath,
+    outputDir: decrypted.outputDir,
+    files: decrypted.candidates
+  });
+
+  if (decrypted.candidates.length <= 1) {
+    return decrypted.candidates;
+  }
+
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: `Choose DLT files from ${fileName}`,
+    defaultPath: decrypted.outputDir,
+    buttonLabel: 'Open Selected DLT',
+    properties: ['openFile', 'multiSelections'],
+    filters: [
+      { name: 'DLT and logs', extensions: ['dlt', 'log', 'bin', 'txt'] },
+      { name: 'All files', extensions: ['*'] }
+    ]
+  });
+
+  return result.canceled ? [] : result.filePaths;
+}
+
 app.setAppUserModelId('com.bltn.analysis-log');
 
 app.whenReady().then(async () => {
@@ -365,10 +429,10 @@ ipcMain.handle('app:check-update', () => {
 
 ipcMain.handle('logs:open-dialog', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
-    title: 'Open DLT / log files',
+    title: 'Open DLT / ENC / log files',
     properties: ['openFile', 'multiSelections'],
     filters: [
-      { name: 'DLT and logs', extensions: ['dlt', 'log', 'bin', 'txt'] },
+      { name: 'DLT, ENC, and logs', extensions: ['dlt', 'enc', 'log', 'bin', 'txt'] },
       { name: 'All files', extensions: ['*'] }
     ]
   });
@@ -388,6 +452,17 @@ ipcMain.handle('logs:parse', async (_event, filePaths) => {
     return { ok: false, error: 'No readable file selected.' };
   }
 
+  let prepared;
+  try {
+    prepared = await prepareFilesForParsing(files);
+  } catch (error) {
+    return { ok: false, error: error.message || 'Could not prepare selected files.' };
+  }
+
+  if (!prepared.ok) {
+    return prepared;
+  }
+
   parseWorker = new Worker(path.join(APP_ROOT, 'src', 'workers', 'parseWorker.js'));
   parseWorker.on('message', (payload) => sendParseEvent(payload));
   parseWorker.on('error', (error) => sendParseEvent({ type: 'error', error: error.message }));
@@ -397,7 +472,7 @@ ipcMain.handle('logs:parse', async (_event, filePaths) => {
     }
     parseWorker = null;
   });
-  parseWorker.postMessage({ type: 'start', files });
+  parseWorker.postMessage({ type: 'start', files: prepared.files });
   return { ok: true };
 });
 

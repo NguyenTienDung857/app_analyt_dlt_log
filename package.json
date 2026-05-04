@@ -1,6 +1,6 @@
 {
   "name": "nexus-dlt-ai-desktop",
-  "version": "1.1.6",
+  "version": "1.1.7",
   "description": "Desktop DLT log viewer and AI diagnostic workbench for Built-in Cam ECU logs.",
   "main": "electron-main.js",
   "type": "commonjs",
@@ -9,7 +9,7 @@
     "pack": "electron-builder --dir",
     "dist": "electron-builder --win --x64",
     "check": "node scripts/smoke-check.js",
-    "syntax": "node --check electron-main.js && node --check preload.js && node --check renderer.js && node --check src/parser/dltParser.js && node --check src/workers/parseWorker.js && node --check src/services/aiClient.js && node --check src/services/contextBuilder.js && node --check src/services/docReader.js && node --check src/services/ragStore.js && node --check src/services/exporter.js"
+    "syntax": "node --check electron-main.js && node --check preload.js && node --check renderer.js && node --check src/parser/dltParser.js && node --check src/workers/parseWorker.js && node --check src/services/aiClient.js && node --check src/services/contextBuilder.js && node --check src/services/docReader.js && node --check src/services/ragStore.js && node --check src/services/exporter.js && node --check src/services/encDecryptor.js"
   },
   "keywords": [
     "dlt",
@@ -38,7 +38,9 @@
       "USER_GUIDE_EN.md",
       "package.json",
       "src/**/*",
-      "system_space.txt"
+      "system_space.txt",
+      "DecryptDll.dll",
+      "libcrypto-3-x64.dll"
     ],
     "directories": {
       "output": "dist"

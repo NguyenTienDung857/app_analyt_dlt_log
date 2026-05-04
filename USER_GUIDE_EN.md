@@ -4,13 +4,14 @@ This app is a desktop log viewer for Built-in Cam ECU logs with an AI diagnostic
 
 ## 1. Open Logs
 
-1. Click `Open DLT` (top bar), or drag-and-drop files onto the landing screen.
+1. Click `Open DLT / ENC` (top bar), or drag-and-drop files onto the landing screen.
 2. You can open multiple files at once. They are parsed in a worker and shown as one combined timeline.
 
-Supported inputs are intended to include: `.dlt`, `.log`, `.bin`.
+Supported inputs are intended to include: `.dlt`, `.enc`, `.log`, `.bin`.
 
 Tips:
 - Large logs keep the UI responsive because parsing is done in the background.
+- `.enc` files are decrypted into a folder beside the source `.enc`, then the app opens that folder so you can choose the `.dlt` files to parse.
 - After parsing finishes, use the left `Search / Filter` panel to narrow down the view.
 
 ## 2. Main Layout

@@ -682,6 +682,19 @@ function submitAiConfigPassword() {
 }
 
 function handleParseEvent(event) {
+  if (event.type === 'decrypt-start') {
+    el.parseProgress.style.width = '0%';
+    el.parseStatus.textContent = `Decrypting ${event.fileName}...`;
+    return;
+  }
+
+  if (event.type === 'decrypt-done') {
+    const count = Array.isArray(event.files) ? event.files.length : 0;
+    el.parseProgress.style.width = '0%';
+    el.parseStatus.textContent = `Decrypted ${event.fileName}. Choose DLT file(s) from ${shortPath(event.outputDir)} (${formatNumber(count)} found).`;
+    return;
+  }
+
   if (event.type === 'start') {
     el.parseStatus.textContent = `Parsing ${event.files.length} file(s)...`;
     el.parseProgress.style.width = '0%';
@@ -1997,7 +2010,8 @@ function buildUserGuideContent() {
     '# BLTN-Analysis Log User Guide',
     '',
     '## 1. Open and read logs',
-    '- Click `Open DLT` or drop `.dlt`, `.log`, or `.bin` files into the app.',
+    '- Click `Open DLT / ENC` or drop `.dlt`, `.enc`, `.log`, or `.bin` files into the app.',
+    '- `.enc` files are decrypted into a folder beside the source file; choose the extracted `.dlt` files from the folder dialog.',
     '- Large logs are parsed in the background and rendered with virtual scrolling.',
     '- Use `Log AI Focus` to split the screen: logs on the left, AI Diagnostic Report on the right.',
     '',

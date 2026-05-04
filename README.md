@@ -88,10 +88,12 @@ gh release create v1.0.1 dist\*.exe dist\*.blockmap dist\latest.yml --title "v1.
 
 ## Mở log
 
-- Bấm `Open DLT` hoặc kéo-thả file vào màn hình đầu.
+- Bấm `Open DLT / ENC` hoặc kéo-thả file vào màn hình đầu.
 - Hỗ trợ mở nhiều file cùng lúc; parse chạy trong worker để UI không bị đơ.
 
-Input dự kiến hỗ trợ: `.dlt`, `.log`, `.bin`.
+Input dự kiến hỗ trợ: `.dlt`, `.enc`, `.log`, `.bin`.
+
+Với file `.enc`, app tự giải mã bằng `DecryptDll.dll` ra một thư mục nằm cùng chỗ với file `.enc`, mở thư mục đó, rồi để người dùng chọn file `.dlt` cần parse.
 
 ## Log viewer
 
