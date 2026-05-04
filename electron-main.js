@@ -282,6 +282,14 @@ function buildChatRagDocs(query) {
   return buildSystemSpaceDocs(query, 8);
 }
 
+function conversationHistoryForSearch(history) {
+  if (!Array.isArray(history)) return [];
+  return history.slice(-4).flatMap((turn) => [
+    String(turn?.user || '').slice(0, 800),
+    String(turn?.assistant || '').slice(0, 1600)
+  ]).filter(Boolean);
+}
+
 function defaultDocumentPaths() {
   const systemSpaceTxt = path.join(APP_ROOT, 'system_space.txt');
   const systemSpaceDocx = path.join(APP_ROOT, 'system_space.docx');
@@ -509,6 +517,7 @@ ipcMain.handle('ai:chat', async (_event, request) => {
 
   const query = [
     request.question || '',
+    ...conversationHistoryForSearch(request.conversationHistory),
     ...(Array.isArray(request.messages) ? request.messages.slice(0, 80).map((message) => message.payload || '') : [])
   ].join(' ');
   const ragDocs = buildChatRagDocs(query);

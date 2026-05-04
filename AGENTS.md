@@ -28,3 +28,15 @@ Recent history uses short informal messages such as `ok` and Vietnamese status n
 ## Security & Configuration Tips
 
 Do not commit new secrets, API keys, or local `ai-config.json` files. `.env`, logs, `node_modules/`, `dist/`, and `out/` are ignored. When changing AI defaults, update all affected layers together: main-process defaults, renderer fallbacks, UI labels, and migration/version guards.
+
+## Agent Workspace Pack
+
+Use `docs/agent/README.md` as the index for deeper repo guidance. The pack is intentionally plain Markdown so Codex, Claude Code, or another agent can read the same source of truth:
+
+- `docs/agent/project-map.md`: module map and high-signal files.
+- `docs/agent/workflows.md`: common change paths for AI, parser, UI, release, and repo-admin work.
+- `docs/agent/ai-behavior.md`: current AI defaults, payload rules, and cross-layer guardrails.
+- `docs/agent/verification.md`: required commands and focused smoke checks.
+- `docs/agent/prompts/`: reusable task briefs for feature, bugfix, review, and release work.
+
+Claude Code project commands and subagents live under `.claude/commands/` and `.claude/agents/`. Codex does not need those files to run, but they mirror the same workflows for users who switch tools.

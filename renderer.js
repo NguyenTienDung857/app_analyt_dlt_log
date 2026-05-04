@@ -16,6 +16,10 @@ const DEFAULT_RUNTIME_MODEL = 'gpt-5.3-codex-xhigh';
 const DEFAULT_QUICK_AI_MODEL = DEFAULT_RUNTIME_MODEL;
 const DEFAULT_AI_CHAT_MODE = 'filtered';
 const DEFAULT_AI_MAX_LOG_LINES = 27000;
+const MAX_AI_CONVERSATION_TURNS = 12;
+const MAX_AI_CONVERSATION_CHARS = 24000;
+const MAX_AI_CONVERSATION_QUESTION_CHARS = 4000;
+const MAX_AI_CONVERSATION_ANSWER_CHARS = 12000;
 const AI_CONTEXT_SUSPICIOUS_KEYWORDS = [
   'error',
   'fail',
@@ -71,6 +75,7 @@ const state = {
   aiConfig: null,
   aiConfigUnlocked: false,
   aiChatMode: DEFAULT_AI_CHAT_MODE,
+  aiConversationHistory: [],
   aiSending: false,
   quickAiPendingId: null,
   naturalSearching: false,
@@ -131,6 +136,7 @@ const el = {
   statSpan: document.getElementById('stat-span'),
   docsStatus: document.getElementById('docs-status'),
   searchInput: document.getElementById('search-input'),
+  searchFullToggle: document.getElementById('search-full-toggle'),
   searchField: document.getElementById('search-field'),
   caseSensitive: document.getElementById('case-sensitive'),
   regexSearch: document.getElementById('regex-search'),
@@ -194,6 +200,7 @@ const el = {
   aiChatLog: document.getElementById('ai-report'),
   aiChatInput: document.getElementById('ai-chat-input'),
   btnAiChatSend: document.getElementById('btn-ai-chat-send'),
+  btnAiChatNew: document.getElementById('btn-ai-chat-new'),
   aiChatModeSelect: document.getElementById('ai-chat-mode-select'),
   aiRuntimeModel: document.getElementById('ai-runtime-model'),
   btnAiPrompt: document.getElementById('btn-ai-prompt'),
@@ -341,6 +348,10 @@ function wireEvents() {
       applyFilters();
     });
   }
+  el.searchFullToggle.addEventListener('change', () => {
+    state.currentPage = 1;
+    applyFilters();
+  });
 
   if (el.pageSize) {
     el.pageSize.addEventListener('change', () => {
@@ -405,6 +416,7 @@ function wireEvents() {
   el.btnFilterRangeUnit.addEventListener('click', toggleFilterRangeUnit);
 
   el.btnAiChatSend.addEventListener('click', () => sendAiChat(state.aiChatMode));
+  el.btnAiChatNew.addEventListener('click', resetAiChatConversation);
   el.aiChatModeSelect.addEventListener('change', () => setAiChatMode(el.aiChatModeSelect.value));
   el.btnAiPrompt.addEventListener('click', toggleAiPromptPanel);
   el.aiGuidanceInput.value = state.aiGuidance;
@@ -503,6 +515,7 @@ async function handleDroppedPaths(paths) {
 
 async function openFiles(paths) {
   clearData();
+  resetFilters();
   el.dropZone.classList.add('hidden');
   el.workspace.classList.remove('hidden');
   el.parseStatus.textContent = 'Starting parser worker...';
@@ -909,6 +922,9 @@ function buildTextMatcher() {
   if (state.naturalFilter) {
     return null;
   }
+  if (el.searchFullToggle.checked) {
+    return null;
+  }
   const query = el.searchInput.value.trim();
   if (!query) {
     return null;
@@ -992,6 +1008,7 @@ function resetFilters() {
   el.searchInput.value = '';
   if (el.focusSearchInput) el.focusSearchInput.value = '';
   if (el.naturalQuery) el.naturalQuery.value = '';
+  el.searchFullToggle.checked = false;
   resetFilterRange(false);
   if (el.caseSensitive) el.caseSensitive.checked = false;
   if (el.regexSearch) el.regexSearch.checked = false;
@@ -1955,6 +1972,7 @@ async function sendAiChat(mode) {
       mode,
       model: el.aiRuntimeModel.value || '',
       messages: contextMessages,
+      conversationHistory: buildAiConversationHistoryPayload(),
       includeSystemSpaceDocs: true,
       selectedIds: selectedContextId !== null ? [selectedContextId] : [],
       stats: collectAiStats(mode, rawMessagesForAi),
@@ -1977,6 +1995,7 @@ async function sendAiChat(mode) {
       docSources: response.promptStats?.docSources || 0
     };
     updateChatBubble(pendingBubble, 'assistant', resultText, responseMeta.contextMessages, responseMeta.docs, responseMeta.docSources, { scroll: 'top' });
+    rememberAiConversationTurn(question, resultText);
     setAiStatus(`AI chat complete. Sent ${formatNumber(responseMeta.contextMessages)} messages and ${formatAiDocUsage(responseMeta)}.`, false);
   } catch (error) {
     updateChatBubble(pendingBubble, 'assistant', `AI error: ${error.message}`, null, null, null, { scroll: 'top' });
@@ -1984,6 +2003,65 @@ async function sendAiChat(mode) {
   } finally {
     setAiSending(false);
   }
+}
+
+function resetAiChatConversation() {
+  if (state.aiSending) {
+    setAiStatus('Wait for the current AI response before starting a new chat.', true);
+    return;
+  }
+
+  state.aiConversationHistory = [];
+  el.aiChatLog.innerHTML = '';
+  appendChatBubble(
+    'assistant',
+    'Select a mode, choose a time range if needed, then press Send.',
+    null,
+    null,
+    null,
+    { scroll: 'none' }
+  );
+  el.aiChatInput.value = '';
+  setAiStatus('New AI chat started. Log context, range, prompt, and model are unchanged.', false);
+  el.aiChatInput.focus();
+}
+
+function rememberAiConversationTurn(userQuestion, assistantAnswer) {
+  const user = trimAiConversationText(userQuestion, MAX_AI_CONVERSATION_QUESTION_CHARS);
+  const assistant = trimAiConversationText(assistantAnswer, MAX_AI_CONVERSATION_ANSWER_CHARS);
+  if (!assistant) return;
+
+  state.aiConversationHistory.push({ user, assistant });
+  if (state.aiConversationHistory.length > MAX_AI_CONVERSATION_TURNS) {
+    state.aiConversationHistory = state.aiConversationHistory.slice(-MAX_AI_CONVERSATION_TURNS);
+  }
+}
+
+function buildAiConversationHistoryPayload() {
+  const turns = Array.isArray(state.aiConversationHistory) ? state.aiConversationHistory : [];
+  const history = [];
+  let usedChars = 0;
+
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const turn = turns[index] || {};
+    const user = trimAiConversationText(turn.user, MAX_AI_CONVERSATION_QUESTION_CHARS);
+    const assistant = trimAiConversationText(turn.assistant, MAX_AI_CONVERSATION_ANSWER_CHARS);
+    if (!assistant) continue;
+
+    const turnChars = user.length + assistant.length;
+    if (history.length && usedChars + turnChars > MAX_AI_CONVERSATION_CHARS) break;
+
+    history.unshift({ user, assistant });
+    usedChars += turnChars;
+  }
+
+  return history;
+}
+
+function trimAiConversationText(value, maxChars) {
+  const text = String(value || '').trim();
+  if (!text || text.length <= maxChars) return text;
+  return `${text.slice(0, Math.max(0, maxChars - 14)).trimEnd()}\n[truncated]`;
 }
 
 async function runQuickRowAi(messageId) {
@@ -2002,8 +2080,9 @@ async function runQuickRowAi(messageId) {
   const prompt = getQuickAiPrompt();
   const question = buildQuickAiQuestion(target, prompt);
   const maxLogLines = contextMessages.length;
+  const visibleQuestion = `Explain message #${target.id}\n${String(target.payload || '').slice(0, 260)}`;
 
-  appendChatBubble('user', `Explain message #${target.id}\n${String(target.payload || '').slice(0, 260)}`, contextMessages.length);
+  appendChatBubble('user', visibleQuestion, contextMessages.length);
   const pendingBubble = appendChatBubble('assistant', `AI is explaining message #${target.id}...`, contextMessages.length, null, null, { pending: true });
 
   state.quickAiPendingId = target.id;
@@ -2039,6 +2118,7 @@ async function runQuickRowAi(messageId) {
       docSources: response.promptStats?.docSources || 0
     };
     updateChatBubble(pendingBubble, 'assistant', resultText, responseMeta.contextMessages, responseMeta.docs, responseMeta.docSources, { scroll: 'top' });
+    rememberAiConversationTurn(visibleQuestion, resultText);
     setAiStatus(`AI explained message #${target.id}. Sent ${formatNumber(responseMeta.contextMessages)} nearby messages and ${formatAiDocUsage(responseMeta)}.`, false);
   } catch (error) {
     updateChatBubble(pendingBubble, 'assistant', `AI error: ${error.message}`, null, null, null, { scroll: 'top' });
@@ -2783,6 +2863,7 @@ function formatAiDocUsage(meta = {}) {
 function setAiSending(isSending) {
   state.aiSending = Boolean(isSending);
   el.btnAiChatSend.disabled = isSending;
+  el.btnAiChatNew.disabled = isSending;
   el.aiChatModeSelect.disabled = isSending;
   el.aiRuntimeModel.disabled = isSending;
   el.btnAiChatSend.textContent = isSending ? 'Waiting...' : 'Send';
@@ -2921,6 +3002,7 @@ function applyNaturalSearchPlan(plan, source, errorMessage = '') {
   state.currentPage = 1;
 
   el.searchInput.value = safePlan.displayQuery;
+  el.searchFullToggle.checked = false;
   if (el.searchField) el.searchField.value = 'payload-time';
   if (el.caseSensitive) el.caseSensitive.checked = false;
   if (el.regexSearch) el.regexSearch.checked = false;
@@ -3680,6 +3762,8 @@ function clearData() {
   state.firstTimeMs = null;
   state.lastTimeMs = null;
   state.currentPage = 1;
+  state.levelFilter = null;
+  state.naturalFilter = null;
   state.parseDone = false;
   state.aiChatMode = DEFAULT_AI_CHAT_MODE;
   state.quickAiPendingId = null;

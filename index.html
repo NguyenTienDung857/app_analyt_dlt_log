@@ -132,8 +132,12 @@
 
         <section id="search-panel" class="command-strip">
           <div class="section-title">Search / Filter</div>
-          <div class="search-group">
+          <div class="search-group keyword-search-row">
             <input id="search-input" class="input search" placeholder="Search payload or time... (F)">
+            <label class="keyword-full-toggle" title="Show all rows and highlight keyword matches">
+              <input id="search-full-toggle" type="checkbox">
+              <span>Full</span>
+            </label>
           </div>
 
           <div class="filter-row">
@@ -177,7 +181,7 @@
 
         <section class="stats-grid">
           <div class="stat-card"><span>Total</span><strong id="stat-total">0</strong></div>
-          <div class="stat-card"><span>Filtered</span><strong id="stat-filtered">0</strong></div>
+          <div class="stat-card"><span>Displayed</span><strong id="stat-filtered">0</strong></div>
           <div class="stat-card error"><span>Error/Fatal</span><strong id="stat-errors">0</strong></div>
           <div class="stat-card warn"><span>Warning</span><strong id="stat-warns">0</strong></div>
           <div class="stat-card"><span>ECU</span><strong id="stat-ecu">0</strong></div>
@@ -317,7 +321,8 @@
                   <option value="filtered" selected>All current line</option>
                   <option value="errors">Bug</option>
                 </select>
-                <button id="btn-ai-chat-send" class="btn primary">Send</button>
+                <button id="btn-ai-chat-new" class="btn" type="button" title="Start a new AI chat">New</button>
+                <button id="btn-ai-chat-send" class="btn primary" type="button">Send</button>
               </div>
             </div>
             <div id="ai-chat-range-info" class="chat-range-info chat-range-info-line">0 message</div>

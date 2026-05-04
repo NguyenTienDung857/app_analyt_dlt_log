@@ -108,11 +108,15 @@ function buildChatPayload(request, ragDocs, config) {
   const context = reduceContext(messages, maxLines);
   const docs = trimDocs(ragDocs, 9000);
   const selectedIds = normalizeIds(request.selectedIds);
+  const conversationHistory = normalizeConversationHistory(request.conversationHistory);
 
   return {
     systemPrompt: '',
     userPrompt: [
-      `User question: ${request.question || ''}`,
+      'Previous conversation in this chat:',
+      formatConversationHistory(conversationHistory),
+      '',
+      `Current user question: ${request.question || ''}`,
       `Selected/current message IDs: ${selectedIds.length ? selectedIds.map((id) => `#${id}`).join(', ') : '(none)'}`,
       '',
       'Relevant ECU documentation from system_space:',
@@ -125,6 +129,7 @@ function buildChatPayload(request, ragDocs, config) {
       contextMessages: context.length,
       docs: docs.length,
       docSources: countDocSources(docs),
+      conversationTurns: conversationHistory.length,
       maxLines
     }
   };
@@ -250,6 +255,38 @@ function formatMessages(messages) {
     const payload = contextSafePayload(message);
     return `id=${formatMessageId(message)} | payload=${payload}`;
   }).join('\n');
+}
+
+function normalizeConversationHistory(history) {
+  if (!Array.isArray(history)) return [];
+
+  return history
+    .slice(-20)
+    .map((turn) => ({
+      user: safeConversationText(turn?.user, 4000),
+      assistant: safeConversationText(turn?.assistant, 12000)
+    }))
+    .filter((turn) => turn.assistant);
+}
+
+function formatConversationHistory(history) {
+  if (!history.length) {
+    return '(no previous conversation in this chat)';
+  }
+
+  return history.map((turn, index) => {
+    const user = turn.user || '(user question was not captured)';
+    return [
+      `Turn ${index + 1} user question: ${user}`,
+      `Turn ${index + 1} AI answer: ${turn.assistant}`
+    ].join('\n');
+  }).join('\n\n');
+}
+
+function safeConversationText(value, maxChars) {
+  const text = String(value || '').trim();
+  if (!text || text.length <= maxChars) return text;
+  return `${text.slice(0, Math.max(0, maxChars - 14)).trimEnd()}\n[truncated]`;
 }
 
 function formatMessageId(message) {

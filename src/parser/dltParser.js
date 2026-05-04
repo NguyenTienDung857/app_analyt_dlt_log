@@ -1,27 +1,27 @@
 const path = require('node:path');
 
 const STORAGE_HEADER_SIZE = 16;
-const MIN_DLT_MESSAGE_SIZE = STORAGE_HEADER_SIZE + 4;
+const SERIAL_HEADER_SIZE = 4;
+const STANDARD_HEADER_SIZE = 4;
+const MIN_DLT_MESSAGE_SIZE = STANDARD_HEADER_SIZE;
 const MAX_PAYLOAD_HEX_BYTES = 1024;
 
 function parseLogBuffer(buffer, options = {}) {
-  if (looksLikeDlt(buffer)) {
+  if (looksLikeDlt(buffer, options)) {
     return parseDltBuffer(buffer, options);
   }
   return parseTextBuffer(buffer, options);
 }
 
-function looksLikeDlt(buffer) {
-  const scanLimit = Math.min(buffer.length - 4, 1024 * 1024);
+function looksLikeDlt(buffer, options = {}) {
+  const scanLimit = Math.max(0, Math.min(buffer.length - STANDARD_HEADER_SIZE, 1024 * 1024));
   for (let offset = 0; offset < scanLimit; offset += 1) {
-    if (
-      buffer[offset] === 0x44 &&
-      buffer[offset + 1] === 0x4c &&
-      buffer[offset + 2] === 0x54 &&
-      buffer[offset + 3] === 0x01
-    ) {
+    if (isStorageHeader(buffer, offset) || isSerialHeader(buffer, offset)) {
       return true;
     }
+  }
+  if (isLikelyDltFile(options) && isPlausibleStandardHeader(buffer, 0, buffer.length, { strictVersion: true })) {
+    return true;
   }
   return false;
 }
@@ -43,14 +43,18 @@ function parseDltBuffer(buffer, options = {}) {
   let lastProgressOffset = 0;
   let chunk = [];
 
+  const frameFormats = new Set();
+
   while (offset + MIN_DLT_MESSAGE_SIZE <= totalLength) {
-    if (!isStorageHeader(buffer, offset)) {
+    const frame = resolveDltFrame(buffer, offset, totalLength);
+    if (!frame) {
       offset += 1;
       skippedBytes += 1;
       continue;
     }
 
     const message = parseDltMessage(buffer, offset, {
+      ...frame,
       filePath,
       fileName,
       fileIndex,
@@ -66,6 +70,7 @@ function parseDltBuffer(buffer, options = {}) {
 
     previousTimeMs = Number.isFinite(message.timeMs) ? message.timeMs : previousTimeMs;
     chunk.push(message);
+    frameFormats.add(frame.format);
     parsed += 1;
     globalIndex += 1;
     offset = message.nextOffset;
@@ -104,26 +109,64 @@ function parseDltBuffer(buffer, options = {}) {
     count: parsed,
     nextIndex: globalIndex,
     skippedBytes,
-    parser: 'dlt'
+    parser: formatDltParserName(frameFormats)
   };
 }
 
-function parseDltMessage(buffer, offset, context) {
-  const totalLength = buffer.length;
-  const timestampSec = buffer.readUInt32LE(offset + 4);
-  const timestampMicro = buffer.readUInt32LE(offset + 8);
-  const storageEcu = readAscii(buffer, offset + 12, 4).trim();
+function resolveDltFrame(buffer, offset, totalLength) {
+  if (
+    isStorageHeader(buffer, offset) &&
+    isPlausibleStandardHeader(buffer, offset + STORAGE_HEADER_SIZE, totalLength, { strictVersion: false })
+  ) {
+    return {
+      standardOffset: offset + STORAGE_HEADER_SIZE,
+      hasStorageHeader: true,
+      hasSerialHeader: false,
+      format: 'storage'
+    };
+  }
 
-  const standardOffset = offset + STORAGE_HEADER_SIZE;
+  if (
+    isSerialHeader(buffer, offset) &&
+    isPlausibleStandardHeader(buffer, offset + SERIAL_HEADER_SIZE, totalLength, { strictVersion: false })
+  ) {
+    return {
+      standardOffset: offset + SERIAL_HEADER_SIZE,
+      hasStorageHeader: false,
+      hasSerialHeader: true,
+      format: 'serial'
+    };
+  }
+
+  if (isPlausibleStandardHeader(buffer, offset, totalLength, { strictVersion: true })) {
+    return {
+      standardOffset: offset,
+      hasStorageHeader: false,
+      hasSerialHeader: false,
+      format: 'raw'
+    };
+  }
+
+  return null;
+}
+
+function parseDltMessage(buffer, frameOffset, context) {
+  const totalLength = buffer.length;
+  const hasStorageHeader = Boolean(context.hasStorageHeader);
+  const standardOffset = context.standardOffset ?? (frameOffset + STORAGE_HEADER_SIZE);
+  const timestampSec = hasStorageHeader ? buffer.readUInt32LE(frameOffset + 4) : null;
+  const timestampMicro = hasStorageHeader ? buffer.readUInt32LE(frameOffset + 8) : 0;
+  const storageEcu = hasStorageHeader ? readAscii(buffer, frameOffset + 12, 4).trim() : '';
+
   const htyp = buffer[standardOffset];
   const counter = buffer[standardOffset + 1];
   const length = buffer.readUInt16BE(standardOffset + 2);
 
-  if (!Number.isFinite(length) || length < 4 || offset + STORAGE_HEADER_SIZE + length > totalLength + 4) {
+  if (!Number.isFinite(length) || length < STANDARD_HEADER_SIZE || standardOffset + length > totalLength) {
     return null;
   }
 
-  const messageEnd = Math.min(offset + STORAGE_HEADER_SIZE + length, totalLength);
+  const messageEnd = standardOffset + length;
   let cursor = standardOffset + 4;
   const useExtendedHeader = Boolean(htyp & 0x01);
   const msbFirst = Boolean(htyp & 0x02);
@@ -183,7 +226,9 @@ function parseDltMessage(buffer, offset, context) {
     ? parseVerbosePayload(buffer, payloadStart, messageEnd, noar, littleEndian)
     : parseNonVerbosePayload(buffer, payloadStart, messageEnd, littleEndian);
 
-  const timeMs = timestampSec * 1000 + Math.floor(timestampMicro / 1000);
+  const timeMs = hasStorageHeader
+    ? timestampSec * 1000 + Math.floor(timestampMicro / 1000)
+    : dltTimestampToMilliseconds(dltTimestamp, context.index);
   const deltaMs = context.previousTimeMs === null || !Number.isFinite(timeMs)
     ? 0
     : timeMs - context.previousTimeMs;
@@ -194,8 +239,8 @@ function parseDltMessage(buffer, offset, context) {
     fileName: context.fileName,
     filePath: context.filePath,
     fileIndex: context.fileIndex,
-    fileOffset: offset,
-    time: formatStorageTime(timestampSec, timestampMicro),
+    fileOffset: frameOffset,
+    time: hasStorageHeader ? formatStorageTime(timestampSec, timestampMicro) : formatDltTime(dltTimestamp, context.index),
     timeMs,
     deltaMs,
     dltTimestamp,
@@ -218,7 +263,10 @@ function parseDltMessage(buffer, offset, context) {
     nonVerbose: !verbose,
     decodeStatus: decoded.decodeStatus,
     version,
-    nextOffset: offset + STORAGE_HEADER_SIZE + length
+    storageHeader: hasStorageHeader,
+    serialHeader: Boolean(context.hasSerialHeader),
+    frameFormat: context.format || (hasStorageHeader ? 'storage' : 'raw'),
+    nextOffset: standardOffset + length
   };
 }
 
@@ -415,6 +463,90 @@ function isStorageHeader(buffer, offset) {
     buffer[offset + 2] === 0x54 &&
     buffer[offset + 3] === 0x01
   );
+}
+
+function isSerialHeader(buffer, offset) {
+  return (
+    buffer[offset] === 0x44 &&
+    buffer[offset + 1] === 0x4c &&
+    buffer[offset + 2] === 0x53 &&
+    buffer[offset + 3] === 0x01
+  );
+}
+
+function isPlausibleStandardHeader(buffer, offset, totalLength = buffer.length, options = {}) {
+  if (offset < 0 || offset + STANDARD_HEADER_SIZE > totalLength) return false;
+
+  const htyp = buffer[offset];
+  const length = buffer.readUInt16BE(offset + 2);
+  if (!Number.isFinite(length) || length < STANDARD_HEADER_SIZE || offset + length > totalLength) {
+    return false;
+  }
+
+  const version = (htyp >> 5) & 0x07;
+  if (options.strictVersion && version !== 1) {
+    return false;
+  }
+
+  const headerLength = getStandardHeaderLength(htyp);
+  if (length < headerLength) {
+    return false;
+  }
+
+  if ((htyp & 0x01) && options.strictVersion) {
+    const extendedOffset = offset + getStandardHeaderLength(htyp, { withoutExtended: true });
+    if (extendedOffset + 10 > offset + length) return false;
+    const msin = buffer[extendedOffset];
+    const mstp = (msin & 0x0e) >> 1;
+    if (mstp > 3) return false;
+    if (!isLikelyDltId(buffer, extendedOffset + 2) || !isLikelyDltId(buffer, extendedOffset + 6)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function getStandardHeaderLength(htyp, options = {}) {
+  let length = STANDARD_HEADER_SIZE;
+  if (htyp & 0x04) length += 4;
+  if (htyp & 0x08) length += 4;
+  if (htyp & 0x10) length += 4;
+  if ((htyp & 0x01) && !options.withoutExtended) length += 10;
+  return length;
+}
+
+function isLikelyDltId(buffer, offset) {
+  for (let index = 0; index < 4; index += 1) {
+    const code = buffer[offset + index];
+    if (code !== 0 && (code < 32 || code > 126)) return false;
+  }
+  return true;
+}
+
+function isLikelyDltFile(options = {}) {
+  const name = String(options.fileName || options.filePath || '').toLowerCase();
+  return name.endsWith('.dlt') || name.endsWith('.bin');
+}
+
+function formatDltParserName(frameFormats) {
+  if (!frameFormats || !frameFormats.size) return 'dlt';
+  if (frameFormats.size === 1) return `dlt-${Array.from(frameFormats)[0]}`;
+  return `dlt-${Array.from(frameFormats).sort().join('+')}`;
+}
+
+function dltTimestampToMilliseconds(dltTimestamp, fallbackIndex) {
+  if (Number.isFinite(dltTimestamp)) {
+    return Math.floor(dltTimestamp / 10);
+  }
+  return Number.isFinite(fallbackIndex) ? fallbackIndex : 0;
+}
+
+function formatDltTime(dltTimestamp, fallbackIndex) {
+  if (Number.isFinite(dltTimestamp)) {
+    return `dlt ${dltTimestamp}`;
+  }
+  return `message ${Number(fallbackIndex || 0) + 1}`;
 }
 
 function readAscii(buffer, offset, length) {
