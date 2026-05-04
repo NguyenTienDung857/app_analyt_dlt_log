@@ -61,11 +61,15 @@ const PREVIOUS_DEFAULT_STRONG_AI_MODELS = new Set([
   'cx/gpt-5.5'
 ]);
 const DEFAULT_QUICK_AI_PROMPT = '';
+const PARSE_RENDER_INTERVAL_MS = 120;
 
 const state = {
   messages: [],
   filtered: [],
   files: [],
+  stats: createEmptyStats(),
+  rangeBounds: createEmptyRangeBounds(),
+  rangeAxis: createEmptyRangeAxis(),
   aiHighlights: new Set(),
   selectedId: null,
   firstTimeMs: null,
@@ -103,6 +107,9 @@ const state = {
   logColumnWidths: loadLogColumnWidths(),
   renderQueued: false,
   virtualRenderQueued: false,
+  parseRenderQueued: false,
+  parseRenderTimer: null,
+  lastParseRenderAt: 0,
   virtualMetrics: null,
   lastVirtualStart: -1,
   lastVirtualEnd: -1,
@@ -695,7 +702,7 @@ function handleParseEvent(event) {
 
   if (event.type === 'chunk') {
     appendMessages(event.messages || []);
-    scheduleRender();
+    scheduleParseRender();
     return;
   }
 
@@ -714,6 +721,8 @@ function handleParseEvent(event) {
 
   if (event.type === 'done') {
     state.parseDone = true;
+    flushParseRender();
+    updateRelativeTimes();
     el.parseProgress.style.width = '100%';
     el.parseStatus.textContent = `Loaded ${formatNumber(event.totalMessages)} messages in ${formatDuration(event.parseMs)}.`;
     applyFilters();
@@ -808,18 +817,51 @@ function handleUpdateStatus(status) {
   }
 }
 
+function createEmptyStats() {
+  return {
+    errors: 0,
+    warns: 0,
+    ecus: new Set(),
+    minId: Infinity,
+    maxId: -Infinity
+  };
+}
+
+function createEmptyRangeBounds() {
+  return {
+    idMin: Infinity,
+    idMax: -Infinity,
+    timeMin: Infinity,
+    timeMax: -Infinity
+  };
+}
+
+function createEmptyRangeAxis() {
+  return {
+    previousClockMs: null,
+    dayOffset: 0
+  };
+}
+
 function appendMessages(messages) {
+  if (!Array.isArray(messages) || !messages.length) return;
+  const startIndex = state.messages.length;
+  const previousFirstTimeMs = state.firstTimeMs;
+
   for (const message of messages) {
     if (Number.isFinite(message.timeMs)) {
       state.firstTimeMs = state.firstTimeMs === null ? message.timeMs : Math.min(state.firstTimeMs, message.timeMs);
       state.lastTimeMs = state.lastTimeMs === null ? message.timeMs : Math.max(state.lastTimeMs, message.timeMs);
-      message.relTimeMs = message.timeMs - state.firstTimeMs;
-    } else {
-      message.relTimeMs = message.id;
     }
+    updateStatsForMessage(message);
     state.messages.push(message);
   }
-  updateRelativeTimes();
+
+  updateAppendedRangeTimes(startIndex);
+  if (previousFirstTimeMs !== state.firstTimeMs && startIndex > 0) {
+    updateRelativeOffsets();
+  }
+
   if (!hasActiveFilters()) {
     for (let index = state.filtered.length; index < state.messages.length; index += 1) {
       state.filtered.push(index);
@@ -829,14 +871,76 @@ function appendMessages(messages) {
   }
 }
 
+function updateStatsForMessage(message) {
+  if (message.level === 'Error' || message.level === 'Fatal') state.stats.errors += 1;
+  else if (message.level === 'Warn') state.stats.warns += 1;
+  if (message.ecu) state.stats.ecus.add(message.ecu);
+
+  const id = Number(message.id);
+  if (Number.isFinite(id)) {
+    state.stats.minId = Math.min(state.stats.minId, id);
+    state.stats.maxId = Math.max(state.stats.maxId, id);
+    state.rangeBounds.idMin = Math.min(state.rangeBounds.idMin, id);
+    state.rangeBounds.idMax = Math.max(state.rangeBounds.idMax, id);
+  }
+}
+
+function updateAppendedRangeTimes(startIndex) {
+  for (let index = startIndex; index < state.messages.length; index += 1) {
+    const message = state.messages[index];
+    message.relTimeMs = Number.isFinite(message.timeMs) && Number.isFinite(state.firstTimeMs)
+      ? message.timeMs - state.firstTimeMs
+      : message.id;
+    message.rangeTimeMs = getIncrementalRangeTimeMs(message, index);
+    updateRangeBoundsForMessage(message);
+  }
+}
+
+function getIncrementalRangeTimeMs(message, index) {
+  const clockMs = parseClockTimeOfDayMs(message.time);
+  if (Number.isFinite(clockMs)) {
+    let value = clockMs + state.rangeAxis.dayOffset;
+    while (state.rangeAxis.previousClockMs !== null && value < state.rangeAxis.previousClockMs) {
+      state.rangeAxis.dayOffset += DAY_MS;
+      value = clockMs + state.rangeAxis.dayOffset;
+    }
+    state.rangeAxis.previousClockMs = value;
+    return value;
+  }
+  return index * SYNTHETIC_RANGE_STEP_MS;
+}
+
+function updateRangeBoundsForMessage(message) {
+  const value = getMessageRangeTimeMs(message);
+  if (!Number.isFinite(value)) return;
+  state.rangeBounds.timeMin = Math.min(state.rangeBounds.timeMin, value);
+  state.rangeBounds.timeMax = Math.max(state.rangeBounds.timeMax, value);
+}
+
+function updateRelativeOffsets() {
+  for (const message of state.messages) {
+    message.relTimeMs = Number.isFinite(message.timeMs) && Number.isFinite(state.firstTimeMs)
+      ? message.timeMs - state.firstTimeMs
+      : message.id;
+  }
+}
+
 function updateRelativeTimes() {
   const rangeAxis = buildRangeTimeAxisValues();
+  state.rangeBounds = createEmptyRangeBounds();
+  state.rangeAxis = createEmptyRangeAxis();
   for (let index = 0; index < state.messages.length; index += 1) {
     const message = state.messages[index];
     message.rangeTimeMs = rangeAxis[index] ?? index * SYNTHETIC_RANGE_STEP_MS;
     message.relTimeMs = Number.isFinite(message.timeMs) && Number.isFinite(state.firstTimeMs)
       ? message.timeMs - state.firstTimeMs
       : message.id;
+    const id = Number(message.id);
+    if (Number.isFinite(id)) {
+      state.rangeBounds.idMin = Math.min(state.rangeBounds.idMin, id);
+      state.rangeBounds.idMax = Math.max(state.rangeBounds.idMax, id);
+    }
+    updateRangeBoundsForMessage(message);
   }
 }
 
@@ -1026,6 +1130,46 @@ function scheduleRender() {
   });
 }
 
+function scheduleParseRender() {
+  if (state.parseDone) {
+    scheduleRender();
+    return;
+  }
+  if (state.parseRenderQueued || state.parseRenderTimer) return;
+
+  const elapsed = Date.now() - state.lastParseRenderAt;
+  if (elapsed >= PARSE_RENDER_INTERVAL_MS) {
+    state.parseRenderQueued = true;
+    requestAnimationFrame(() => {
+      state.parseRenderQueued = false;
+      if (state.parseDone) return;
+      state.lastParseRenderAt = Date.now();
+      renderParsingView();
+    });
+    return;
+  }
+
+  state.parseRenderTimer = setTimeout(() => {
+    state.parseRenderTimer = null;
+    scheduleParseRender();
+  }, PARSE_RENDER_INTERVAL_MS - elapsed);
+}
+
+function flushParseRender() {
+  if (state.parseRenderTimer) {
+    clearTimeout(state.parseRenderTimer);
+    state.parseRenderTimer = null;
+  }
+  state.parseRenderQueued = false;
+}
+
+function renderParsingView() {
+  applyLogColumnTemplate();
+  renderStats();
+  renderPagination();
+  renderVirtualRows();
+}
+
 function renderAll() {
   applyLogColumnTemplate();
   renderStats();
@@ -1041,22 +1185,14 @@ function renderAll() {
 }
 
 function renderStats() {
-  const messages = state.messages;
-  let errors = 0;
-  let warns = 0;
-  const ecus = new Set();
-  for (const message of messages) {
-    if (message.level === 'Error' || message.level === 'Fatal') errors += 1;
-    else if (message.level === 'Warn') warns += 1;
-    if (message.ecu) ecus.add(message.ecu);
-  }
-  const spanMs = state.firstTimeMs !== null && state.lastTimeMs !== null ? state.lastTimeMs - state.firstTimeMs : 0;
+  const bounds = getRangeBounds('time');
+  const spanMs = bounds ? bounds.max - bounds.min : 0;
 
-  el.statTotal.textContent = formatNumber(messages.length);
+  el.statTotal.textContent = formatNumber(state.messages.length);
   el.statFiltered.textContent = formatNumber(state.filtered.length);
-  el.statErrors.textContent = formatNumber(errors);
-  el.statWarns.textContent = formatNumber(warns);
-  el.statEcu.textContent = formatNumber(ecus.size);
+  el.statErrors.textContent = formatNumber(state.stats.errors);
+  el.statWarns.textContent = formatNumber(state.stats.warns);
+  el.statEcu.textContent = formatNumber(state.stats.ecus.size);
   el.statSpan.textContent = spanMs ? formatDuration(spanMs) : '-';
 }
 
@@ -1101,19 +1237,23 @@ function renderVirtualRows() {
 function buildVirtualMetrics(pageIndices) {
   const payloadWidth = getPayloadColumnWidth();
   const cache = state.virtualMetrics;
-  if (
-    cache &&
+  const canExtendCache = cache &&
     cache.indices === pageIndices &&
     cache.payloadWidth === payloadWidth &&
-    cache.count === pageIndices.length
-  ) {
+    cache.count <= pageIndices.length;
+
+  if (canExtendCache && cache.count === pageIndices.length) {
     return cache;
   }
 
-  const heights = new Array(pageIndices.length);
-  const offsets = new Array(pageIndices.length + 1);
-  offsets[0] = 0;
-  for (let index = 0; index < pageIndices.length; index += 1) {
+  const heights = canExtendCache ? cache.heights : new Array(pageIndices.length);
+  const offsets = canExtendCache ? cache.offsets : new Array(pageIndices.length + 1);
+  const startIndex = canExtendCache ? cache.count : 0;
+  heights.length = pageIndices.length;
+  offsets.length = pageIndices.length + 1;
+  if (!canExtendCache) offsets[0] = 0;
+
+  for (let index = startIndex; index < pageIndices.length; index += 1) {
     const message = state.messages[pageIndices[index]];
     const height = estimateRowHeight(message, payloadWidth);
     heights[index] = height;
@@ -1135,9 +1275,19 @@ function estimateRowHeight(message, payloadWidth) {
   const payload = String(message?.payload || '');
   if (!payload) return MIN_ROW_HEIGHT;
   const charsPerLine = Math.max(24, Math.floor((payloadWidth - 24) / ESTIMATED_MONO_CHAR_WIDTH));
-  const lines = payload.split(/\r?\n/).reduce((total, line) => {
-    return total + Math.max(1, Math.ceil(line.length / charsPerLine));
-  }, 0);
+  let lines = 0;
+  let lineLength = 0;
+  for (let index = 0; index < payload.length; index += 1) {
+    const code = payload.charCodeAt(index);
+    if (code === 10 || code === 13) {
+      lines += Math.max(1, Math.ceil(lineLength / charsPerLine));
+      lineLength = 0;
+      if (code === 13 && payload.charCodeAt(index + 1) === 10) index += 1;
+    } else {
+      lineLength += 1;
+    }
+  }
+  lines += Math.max(1, Math.ceil(lineLength / charsPerLine));
   return Math.max(MIN_ROW_HEIGHT, Math.ceil(lines * ROW_LINE_HEIGHT + ROW_VERTICAL_PADDING));
 }
 
@@ -1361,7 +1511,7 @@ function renderTimeline() {
   let max = -Infinity;
   let finiteCount = 0;
   for (const index of state.filtered) {
-    const timeMs = state.messages[index]?.timeMs;
+    const timeMs = getMessageRangeTimeMs(state.messages[index]);
     if (!Number.isFinite(timeMs)) continue;
     finiteCount += 1;
     if (timeMs < min) min = timeMs;
@@ -1380,8 +1530,9 @@ function renderTimeline() {
 
   for (const index of state.filtered) {
     const message = state.messages[index];
-    if (!Number.isFinite(message?.timeMs)) continue;
-    const bin = Math.min(bins.length - 1, Math.floor(((message.timeMs - min) / span) * bins.length));
+    const timeMs = getMessageRangeTimeMs(message);
+    if (!Number.isFinite(timeMs)) continue;
+    const bin = Math.min(bins.length - 1, Math.floor(((timeMs - min) / span) * bins.length));
     if (state.aiHighlights.has(message.id)) bins[bin].ai += 1;
     else if (message.level === 'Fatal' || message.level === 'Error') bins[bin].error += 1;
     else if (message.level === 'Warn') bins[bin].warn += 1;
@@ -1417,9 +1568,11 @@ function drawStack(ctx, x, yBottom, barWidth, count, maxCount, color, plotHeight
 
 function drawMinuteTicks(ctx, min, max, width, height, top, bottom) {
   const minuteMs = 60 * 1000;
-  const firstMinute = Math.ceil(min / minuteMs) * minuteMs;
-  if (!Number.isFinite(firstMinute)) return;
-  if (firstMinute > max) {
+  const maxVisibleTicks = Math.max(1, Math.floor(width / 58));
+  const stepMs = Math.max(minuteMs, Math.ceil(((max - min) / maxVisibleTicks) / minuteMs) * minuteMs);
+  const firstTick = Math.ceil(min / stepMs) * stepMs;
+  if (!Number.isFinite(firstTick)) return;
+  if (firstTick > max) {
     ctx.save();
     ctx.font = '10px Cascadia Code, Consolas, monospace';
     ctx.fillStyle = 'rgba(237,247,242,0.56)';
@@ -1428,8 +1581,8 @@ function drawMinuteTicks(ctx, min, max, width, height, top, bottom) {
     return;
   }
 
-  const minuteCount = Math.max(1, Math.floor((max - firstMinute) / minuteMs) + 1);
-  const labelEvery = Math.max(1, Math.ceil(minuteCount / Math.max(1, Math.floor(width / 58))));
+  const tickCount = Math.max(1, Math.floor((max - firstTick) / stepMs) + 1);
+  const labelEvery = Math.max(1, Math.ceil(tickCount / maxVisibleTicks));
   ctx.save();
   ctx.font = '10px Cascadia Code, Consolas, monospace';
   ctx.textAlign = 'left';
@@ -1437,7 +1590,7 @@ function drawMinuteTicks(ctx, min, max, width, height, top, bottom) {
   ctx.fillStyle = 'rgba(237,247,242,0.56)';
 
   let index = 0;
-  for (let tick = firstMinute; tick <= max; tick += minuteMs) {
+  for (let tick = firstTick; tick <= max; tick += stepMs) {
     const x = ((tick - min) / Math.max(1, max - min)) * width;
     ctx.beginPath();
     ctx.moveTo(x, top);
@@ -2737,25 +2890,13 @@ function getRangeControls(kind) {
 function getRangeBounds(unit) {
   if (!state.messages.length) return null;
   if (unit === 'id') {
-    let min = Infinity;
-    let max = -Infinity;
-    for (const message of state.messages) {
-      const id = Number(message.id);
-      if (!Number.isFinite(id)) continue;
-      min = Math.min(min, id);
-      max = Math.max(max, id);
-    }
+    const min = state.rangeBounds.idMin;
+    const max = state.rangeBounds.idMax;
     if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
     return { min, max };
   }
-  let min = Infinity;
-  let max = -Infinity;
-  for (const message of state.messages) {
-    const value = getMessageRangeTimeMs(message);
-    if (!Number.isFinite(value)) continue;
-    if (value < min) min = value;
-    if (value > max) max = value;
-  }
+  const min = state.rangeBounds.timeMin;
+  let max = state.rangeBounds.timeMax;
   if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
   if (max <= min) max = min + SYNTHETIC_RANGE_STEP_MS;
   return { min, max };
@@ -3600,7 +3741,7 @@ function buildLocalContext(fromMs, toMs, windowMs, maxLines) {
 function selectedRange() {
   const message = getSelectedMessage();
   if (!message) return null;
-  const value = Number.isFinite(message.timeMs) ? message.timeMs : getMessageRangeTimeMs(message);
+  const value = getMessageRangeTimeMs(message);
   return Number.isFinite(value) ? { fromMs: value, toMs: value } : null;
 }
 
@@ -3679,7 +3820,7 @@ function handleTimelineClick(event) {
   let min = Infinity;
   let max = -Infinity;
   for (const index of state.filtered) {
-    const timeMs = state.messages[index]?.timeMs;
+    const timeMs = getMessageRangeTimeMs(state.messages[index]);
     if (!Number.isFinite(timeMs)) continue;
     if (timeMs < min) min = timeMs;
     if (timeMs > max) max = timeMs;
@@ -3690,8 +3831,9 @@ function handleTimelineClick(event) {
   let nearestDistance = Infinity;
   for (const index of state.filtered) {
     const message = state.messages[index];
-    if (!Number.isFinite(message?.timeMs)) continue;
-    const distance = Math.abs(message.timeMs - target);
+    const timeMs = getMessageRangeTimeMs(message);
+    if (!Number.isFinite(timeMs)) continue;
+    const distance = Math.abs(timeMs - target);
     if (distance < nearestDistance) {
       nearest = message;
       nearestDistance = distance;
@@ -3759,12 +3901,13 @@ function collectStats() {
   for (const message of state.messages) {
     levels[message.level] = (levels[message.level] || 0) + 1;
   }
+  const bounds = getRangeBounds('time');
   return {
     total: state.messages.length,
     filtered: state.filtered.length,
     files: state.files,
     levels,
-    timeSpanMs: state.firstTimeMs !== null && state.lastTimeMs !== null ? state.lastTimeMs - state.firstTimeMs : 0,
+    timeSpanMs: bounds ? bounds.max - bounds.min : 0,
     ecuCount: new Set(state.messages.map((message) => message.ecu).filter(Boolean)).size
   };
 }
@@ -3776,6 +3919,7 @@ function collectAiStats(mode, contextMessages) {
     levels[message.level] = (levels[message.level] || 0) + 1;
   }
   const range = mode === 'range' ? resolveChatRange() : null;
+  const bounds = getRangeBounds('time');
   return {
     mode,
     totalMessages: state.messages.length,
@@ -3787,7 +3931,7 @@ function collectAiStats(mode, contextMessages) {
     })),
     timeStart: state.firstTimeMs !== null ? formatTimeLabel(state.firstTimeMs) : '',
     timeEnd: state.lastTimeMs !== null ? formatTimeLabel(state.lastTimeMs) : '',
-    timeSpanMs: state.firstTimeMs !== null && state.lastTimeMs !== null ? state.lastTimeMs - state.firstTimeMs : 0,
+    timeSpanMs: bounds ? bounds.max - bounds.min : 0,
     selectedId: state.selectedId,
     selectedRange: range ? {
       unit: range.unit,
@@ -3812,9 +3956,13 @@ function resetWorkspace() {
 }
 
 function clearData() {
+  flushParseRender();
   state.messages = [];
   state.filtered = [];
   state.files = [];
+  state.stats = createEmptyStats();
+  state.rangeBounds = createEmptyRangeBounds();
+  state.rangeAxis = createEmptyRangeAxis();
   state.aiHighlights = new Set();
   state.selectedId = null;
   state.firstTimeMs = null;
@@ -3825,6 +3973,7 @@ function clearData() {
   state.parseDone = false;
   state.aiChatMode = DEFAULT_AI_CHAT_MODE;
   state.quickAiPendingId = null;
+  state.lastParseRenderAt = 0;
   state.aiRange = {
     unit: 'time',
     min: null,
