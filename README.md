@@ -93,7 +93,7 @@ gh release create v1.0.1 dist\*.exe dist\*.blockmap dist\latest.yml --title "v1.
 
 Input dự kiến hỗ trợ: `.dlt`, `.enc`, `.log`, `.bin`.
 
-Với file `.enc`, app tự giải mã bằng `DecryptDll.dll` ra một thư mục nằm cùng chỗ với file `.enc`, mở thư mục đó, rồi để người dùng chọn file `.dlt` cần parse.
+Với file `.enc`, app tự giải mã bằng `DecryptDll.dll` ra thư mục dữ liệu local của app, mở thư mục đã giải nén đó, rồi để người dùng chọn file `.dlt` cần parse. Cách này ổn định hơn khi file `.enc` nằm trên thẻ nhớ hoặc ổ rời.
 
 ## Log viewer
 
@@ -128,11 +128,12 @@ Lưu ý: dòng `Counter` đã được bỏ khỏi Message Detail (UI gọn hơn
 
 Panel bên trái:
 
-- Ô search `Search payload or time... (F)` để tìm nhanh.
-- `AI Search`: nhập câu hỏi tự nhiên và để AI chuyển thành filter plan local.
-- `Time Range`: slider 2 đầu để giới hạn view theo `HH:mm:ss`.
+- Ô search `Search payload or time... (F)` để tìm nhanh; bấm `+` để mở thêm ô search keyword chạy song song.
+- Mỗi ô search có bộ đếm keyword match và nút lên/xuống riêng; ô mở thêm có nút `x` để xóa.
+- `Full` mặc định bật để giữ toàn bộ view và highlight tất cả keyword; tắt `Full` thì hiện các message match bất kỳ ô search nào.
+- `ID Range`: slider 2 đầu để giới hạn view theo ID; nhãn ID đã kèm thời gian có ngày (`D1`, `D2`, ...) nên không cần chế độ Time riêng.
   - Bấm `Full Log` để reset về toàn bộ log.
-- `Export CSV`: xuất các dòng đang hiển thị (sau khi áp dụng search + range + AI Search filter).
+- `Export CSV`: xuất các dòng đang hiển thị (sau khi áp dụng search + range).
 
 Trong `Log AI Focus`, có thêm nút `Search` nhỏ ngay trên bảng log để quick search.
 
@@ -151,7 +152,7 @@ Dùng `Log AI Focus` để mở panel AI bên phải.
 Tính năng liên quan:
 - Có thể chọn model theo từng lần `Send` bằng dropdown (nếu để `Config Default` thì dùng model trong AI config).
 - Nút `Prompt` mở panel guidance để thêm yêu cầu trả lời (được lưu local).
-- App gửi context rút gọn (chủ yếu time + payload) và kèm snippet tài liệu ECU (RAG) để kiểm soát token.
+- App gửi context rút gọn (ID + time `HH:mm:ss` + payload) và kèm snippet tài liệu ECU (RAG) để kiểm soát token.
 
 ## Add ECU Docs / RAG
 

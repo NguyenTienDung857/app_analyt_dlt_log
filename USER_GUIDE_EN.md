@@ -11,7 +11,7 @@ Supported inputs are intended to include: `.dlt`, `.enc`, `.log`, `.bin`.
 
 Tips:
 - Large logs keep the UI responsive because parsing is done in the background.
-- `.enc` files are decrypted into a folder beside the source `.enc`, then the app opens that folder so you can choose the `.dlt` files to parse.
+- `.enc` files are decrypted into the app data folder, then the app opens that extracted folder so you can choose the `.dlt` files to parse. This is more reliable for files stored on SD cards or removable drives.
 - After parsing finishes, use the left `Search / Filter` panel to narrow down the view.
 
 ## 2. Main Layout
@@ -90,28 +90,19 @@ Use the `Search payload or time... (F)` input to quickly search within the curre
 
 In `Log AI Focus`, there is also a small `Search` button above the log table for quick search access.
 
-### 6.2 AI Search (Natural-Language Search)
+### 6.2 Keyword Navigation
 
-Use the `Natural language search` input and press `AI Search` to let AI convert your query into a local filter plan.
+Click `+` beside the main search input to add another keyword search box. Each search box has its own match counter and up/down buttons.
 
-Example queries:
+`Full` is enabled by default. All active searches highlight matches while keeping the current log view visible. Turn `Full` off to show rows that match any active keyword search.
 
-- `camera drops FPS after temp > 80`
-- `find timeout after reboot`
-- `sd card write error`
+Use the up/down buttons beside each counter to move between matches for that search box. Extra search boxes have `x` to remove them.
 
-What happens:
+### 6.3 ID Range Filter
 
-1. The app submits the query to AI to generate a filter plan.
-2. The app applies the plan locally to narrow the visible rows.
-3. The `AI Diagnostic Report` panel shows the result status.
+Use the `ID Range` panel (two-handle slider) to restrict the visible logs by message ID. Each ID label also includes the matching time, so there is no separate Time Range mode.
 
-Tip:
-- Short, specific English terms usually work best for filtering.
-
-### 6.3 Time Range Filter
-
-Use the `Time Range` panel (two-handle slider) to restrict the visible logs to a `HH:mm:ss` window.
+Time labels include a day marker such as `D1` or `D2` so multi-day logs stay clear.
 
 - Use `Full Log` to reset the filter back to the entire log.
 
@@ -125,7 +116,7 @@ This filter affects:
 
 Click `Export CSV` to export the currently filtered rows to a CSV file.
 
-The export uses the current filter state (search + range + AI Search filter).
+The export uses the current filter state (search + range).
 
 ## 7. ECU Docs / RAG (Add ECU Docs)
 
@@ -180,7 +171,7 @@ Use the model dropdown near the report header to pick the model per request:
 Click `Prompt` to open the guidance panel and add optional instructions, such as:
 
 - `Answer in 4 sections: verification, root cause, impact, next steps`
-- `Cite evidence using message id and payload`
+- `Cite evidence using message id, time, and payload`
 - `Be concise and propose a test bench reproduction`
 
 Guidance is stored locally and applied to subsequent requests.
@@ -189,7 +180,7 @@ Guidance is stored locally and applied to subsequent requests.
 
 To keep token usage controlled, the app sends a reduced context view:
 
-- Log context is primarily message id and payload for selected rows/windows
+- Log context is primarily message id, `HH:mm:ss` time, and payload for selected rows/windows
 - The default AI context limit is 27,000 messages and can be changed in `AI / RAG Config`
 - Relevant ECU docs are retrieved locally (RAG) and attached as snippets
 
@@ -273,5 +264,5 @@ gh release create v1.0.1 dist\*.exe dist\*.blockmap dist\latest.yml --title "v1.
 ## 13. Troubleshooting
 
 - If AI returns an error, verify Base URL / API key / model in `AI / RAG Config`.
-- If results are too broad, narrow the view first using range filter + AI Search, then use AI `Range` or `Filtered`.
+- If results are too broad, narrow the view first using search and the ID Range filter, then use AI `Range` or `Filtered`.
 - If payloads are non-verbose and not human-readable, ingest FIBEX/ARXML docs and retry AI analysis.

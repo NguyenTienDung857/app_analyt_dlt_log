@@ -37,6 +37,7 @@ Row-level AI should explain the clicked message only. It should not silently swi
 For mode-specific AI context, keep the compact shape focused on:
 
 - `id`
+- `time` (`HH:mm:ss` only)
 - `payload`
 
 Avoid reintroducing aggressive payload truncation or priority-based sampling unless the user asks for it. The known large-log use case is around `27000` messages, so low hard caps are usually wrong for this repo.

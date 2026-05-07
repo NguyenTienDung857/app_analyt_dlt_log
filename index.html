@@ -126,7 +126,7 @@
       <aside class="left-rail panel">
         <section>
           <div class="section-title">Message Detail</div>
-          <div id="detail-empty" class="empty-state">Select a row to inspect file, timestamp, and payload.</div>
+          <div id="detail-empty" class="empty-state">Select a row to inspect file and timestamp.</div>
           <div id="detail-panel" class="detail-panel hidden"></div>
         </section>
 
@@ -134,24 +134,28 @@
           <div class="section-title">Search / Filter</div>
           <div class="search-group keyword-search-row">
             <input id="search-input" class="input search" placeholder="Search payload or time... (F)">
+            <button id="btn-add-search" class="btn small add-search-btn" type="button" title="Add another keyword search">+</button>
             <label class="keyword-full-toggle" title="Show all rows and highlight keyword matches">
-              <input id="search-full-toggle" type="checkbox">
+              <input id="search-full-toggle" type="checkbox" checked>
               <span>Full</span>
             </label>
           </div>
-
-          <div class="filter-row">
-            <input id="natural-query" class="input natural" placeholder="Natural language search, e.g. camera drops FPS after temp > 80">
-            <button id="btn-natural" class="btn">AI Search</button>
+          <div id="search-match-bar" class="search-match-bar">
+            <span id="search-match-count">No keyword</span>
+            <div class="search-match-actions">
+              <button id="btn-search-prev-match" class="btn small search-nav-btn" type="button" title="Previous keyword match">&uarr;</button>
+              <button id="btn-search-next-match" class="btn small search-nav-btn" type="button" title="Next keyword match">&darr;</button>
+            </div>
           </div>
+          <div id="extra-search-list" class="extra-search-list"></div>
 
           <div class="filter-row compact">
             <input id="time-from" type="hidden">
             <input id="time-to" type="hidden">
             <div id="filter-time-range-panel" class="left-time-range-panel">
               <div class="range-head compact-range-head">
-                <span id="filter-range-title">Time Range</span>
-                <button id="btn-filter-range-unit" class="btn small range-unit-toggle hidden" type="button">Time</button>
+                <span id="filter-range-title">ID Range</span>
+                <button id="btn-filter-range-unit" class="btn small range-unit-toggle hidden" type="button"></button>
                 <span id="filter-range-limits">No logs loaded</span>
               </div>
               <div class="dual-range compact-dual-range">

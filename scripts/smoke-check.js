@@ -136,7 +136,7 @@ if (!rag.search('camera timeout DTC', 1).length) {
 
 const chatPayload = buildChatPayload({
   question: 'Continue the diagnosis.',
-  messages: [{ id: 1, payload: 'Camera timeout detected' }],
+  messages: [{ id: 1, time: '2026-05-07 08:15:30.123', payload: 'Camera timeout detected' }],
   conversationHistory: [{
     user: 'What is the first issue?',
     assistant: 'The first issue is a camera timeout around message #1.'
@@ -145,6 +145,7 @@ const chatPayload = buildChatPayload({
 }, [{ source: 'system_space', sourcePath: 'system_space.txt', score: 1, text: 'Camera timeout diagnostic guidance.' }], { maxLogLines: 10 });
 if (!chatPayload.userPrompt.includes('Previous conversation in this chat')
   || !chatPayload.userPrompt.includes('camera timeout around message #1')
+  || !chatPayload.userPrompt.includes('id=#1 | time=08:15:30 | payload=Camera timeout detected')
   || chatPayload.promptStats.conversationTurns !== 1) {
   throw new Error('AI conversation history smoke check failed.');
 }

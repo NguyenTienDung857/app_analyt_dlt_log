@@ -26,28 +26,6 @@ function buildAnalysisPayload(request, ragDocs, config) {
   };
 }
 
-function buildNaturalSearchPayload(request, ragDocs) {
-  return {
-    systemPrompt: [
-      'Convert a natural-language ECU log search request into a deterministic local filter.',
-      'Translate any non-English user intent into English technical log keywords before building the filter.',
-      'Always return valid JSON. All search_text and keywords must be English because the log payloads are English.',
-      'Available DLT fields: payload, level, type, ecu, apid, ctid, fileName, time, timeMs, messageId.',
-      'Do not return an empty filter. If uncertain, create broad keywords from the question and technical synonyms.',
-      'Example: "dropped frame" -> keywords include frame, fps, drop, dropped, lost, camera. "temperature > 80" -> temperature, temp, thermal, overheat, 80.',
-      'Only set levels if the user explicitly says Fatal/Error/Warn/Info/Debug; do not set a level only because the user says "issue" or "bug".'
-    ].join('\n'),
-    userPrompt: [
-      `User search request: ${request.query || ''}`,
-      '',
-      'Relevant ECU documentation snippets:',
-      formatDocs(trimDocs(ragDocs, 4000)),
-      '',
-      'Create a filter the UI can apply locally.'
-    ].join('\n')
-  };
-}
-
 function buildSequencePayload(request, ragDocs, config) {
   const selection = selectContextMessages(
     Array.isArray(request.messages) ? request.messages : [],
@@ -122,7 +100,7 @@ function buildChatPayload(request, ragDocs, config) {
       'Relevant ECU documentation from system_space:',
       formatDocs(docs),
       '',
-      'Attached log context (message id and payload only):',
+      'Attached log context (message id, HH:MM:SS time, and payload only):',
       formatMessages(context)
     ].join('\n'),
     promptStats: {
@@ -206,7 +184,7 @@ function diagnosticSystemPrompt(docs) {
     'Use the same language as the user question for all text fields.',
     'Goal: find root cause from DLT logs, not just summarize. Prioritize Error/Fatal, reset/ignition-cycle windows, DTC/UDS evidence, camera FPS/voltage/temperature/storage/network symptoms, and timing order.',
     'Use the provided ECU documentation snippets as evidence. If evidence is insufficient, state which log/message/mapping is missing.',
-    'For non-verbose DLT, do not interpret raw hex as text. Use only message id, decoded payload, and mapping/documentation if available.',
+    'For non-verbose DLT, do not interpret raw hex as text. Use only message id, HH:MM:SS time, decoded payload, and mapping/documentation if available.',
     'Return structured JSON matching the schema. suspicious_message_ids must be numeric ids from the provided log rows.',
     'Do not leave issue verification, root cause, impact, or reproduction empty. If uncertain, provide the best technical hypothesis and confidence level.',
     '',
@@ -221,11 +199,11 @@ function diagnosticUserPrompt(request, selection, query) {
     `User goal/question: ${request.query || 'Find the most likely ECU issue and root cause.'}`,
     `Context keywords: ${query}`,
     '',
-    'DLT messages in context (message id and payload only):',
+    'DLT messages in context (message id, HH:MM:SS time, and payload only):',
     formatMessages(selection.context),
     '',
     'Output requirements:',
-    '- error_verification: verify whether this is an issue, certainty level, evidence by message id/payload',
+    '- error_verification: verify whether this is an issue, certainty level, evidence by message id/time/payload',
     '- root_cause: root cause and reasoning based on log and documentation',
     '- impact: issue consequence or impact',
     '- reproduction_steps: reproduction steps or required reproduction conditions',
@@ -241,7 +219,7 @@ function buildDiagnosticQuery(request, selection) {
     ...selection.context
       .filter((message) => isFaultLevel(message.level) || message.level === 'Warn')
       .slice(0, 80)
-      .map((message) => `${formatMessageId(message)} ${message.payload}`)
+      .map((message) => `${formatMessageId(message)} ${formatAiClockTime(message)} ${message.payload}`)
   ];
   return parts.join(' ').slice(0, 8000);
 }
@@ -253,7 +231,7 @@ function formatMessages(messages) {
 
   return messages.map((message) => {
     const payload = contextSafePayload(message);
-    return `id=${formatMessageId(message)} | payload=${payload}`;
+    return `id=${formatMessageId(message)} | time=${formatAiClockTime(message)} | payload=${payload}`;
   }).join('\n');
 }
 
@@ -310,7 +288,7 @@ function formatAiClockTime(message) {
   if (match) return match[0].split('.')[0];
   const timeMs = Number(message?.timeMs);
   if (Number.isFinite(timeMs)) return new Date(timeMs).toISOString().slice(11, 19);
-  return raw || '-';
+  return '-';
 }
 
 function formatDocs(docs) {
@@ -367,7 +345,6 @@ function normalizeIds(values) {
 module.exports = {
   buildAnalysisPayload,
   buildChatPayload,
-  buildNaturalSearchPayload,
   buildSequencePayload,
   buildScriptPayload,
   selectContextMessages,

@@ -202,18 +202,6 @@ textarea {
   font-weight: 700;
 }
 
-#btn-natural {
-  border-color: rgba(57, 217, 138, 0.42);
-  color: #d8fff0;
-  background: linear-gradient(135deg, #075936, #06483d);
-  font-weight: 800;
-}
-
-#btn-natural:disabled {
-  color: rgba(216, 255, 240, 0.72);
-  background: linear-gradient(135deg, #064028, #06342e);
-}
-
 .btn.danger {
   border-color: rgba(255, 92, 108, 0.35);
   color: #ffb7bf;
@@ -833,7 +821,6 @@ textarea {
 }
 
 .left-rail .search,
-.left-rail .natural,
 .left-rail .select,
 .left-rail .time-input {
   width: 100%;
@@ -853,9 +840,34 @@ textarea {
 
 .left-rail .keyword-search-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: stretch;
   gap: 6px;
+}
+
+.left-rail .extra-keyword-search-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.add-search-btn,
+.remove-search-btn {
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0 9px;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.extra-search-list {
+  display: grid;
+  gap: 6px;
+}
+
+.extra-search-item {
+  display: grid;
+  gap: 2px;
+  padding-top: 2px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .keyword-full-toggle {
@@ -890,6 +902,34 @@ textarea {
 .keyword-full-toggle:hover {
   border-color: var(--accent);
   background: rgba(57, 217, 138, 0.1);
+}
+
+.search-match-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 1px;
+  color: var(--muted);
+  font: 11px var(--font-mono);
+}
+
+.search-match-bar.has-matches {
+  color: var(--text);
+}
+
+.search-match-actions {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.search-nav-btn {
+  min-width: 27px;
+  min-height: 26px;
+  padding: 2px 7px;
+  font-size: 13px;
+  line-height: 1;
 }
 
 .left-rail .filter-row label,
@@ -1292,8 +1332,10 @@ textarea {
 }
 
 .range-footer > span {
+  min-width: 0;
   color: var(--text);
   font: 11px var(--font-mono);
+  overflow-wrap: anywhere;
 }
 
 .range-footer > span:last-child {
@@ -1821,10 +1863,6 @@ textarea {
 
 .search {
   flex: 1;
-}
-
-.natural {
-  flex: 1 1 420px;
 }
 
 .time-input {

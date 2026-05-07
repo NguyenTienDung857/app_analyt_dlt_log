@@ -70,37 +70,6 @@ const DIAGNOSTIC_SCHEMA = {
   }
 };
 
-const NATURAL_SEARCH_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  required: [
-    'explanation',
-    'search_text',
-    'regex',
-    'case_sensitive',
-    'levels',
-    'ecu',
-    'apid',
-    'ctid',
-    'from_time',
-    'to_time',
-    'keywords'
-  ],
-  properties: {
-    explanation: { type: 'string' },
-    search_text: { type: 'string' },
-    regex: { type: 'boolean' },
-    case_sensitive: { type: 'boolean' },
-    levels: { type: 'array', items: { type: 'string' } },
-    ecu: { type: 'string' },
-    apid: { type: 'string' },
-    ctid: { type: 'string' },
-    from_time: { type: 'string' },
-    to_time: { type: 'string' },
-    keywords: { type: 'array', items: { type: 'string' } }
-  }
-};
-
 const SEQUENCE_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -161,11 +130,6 @@ class AiClient {
     } catch (_error) {
       return normalized;
     }
-  }
-
-  async naturalSearch(payload) {
-    const result = await this.completeStructured(payload, NATURAL_SEARCH_SCHEMA, 'dlt_natural_search_filter');
-    return normalizeNaturalSearchResult(result);
   }
 
   async sequenceDiagram(payload) {
@@ -500,22 +464,6 @@ function normalizeDiagnosticResult(result) {
   };
 }
 
-function normalizeNaturalSearchResult(result) {
-  return {
-    explanation: stringOrFallback(result?.explanation, result?.summary || ''),
-    search_text: String(result?.search_text || result?.query || ''),
-    regex: Boolean(result?.regex),
-    case_sensitive: Boolean(result?.case_sensitive),
-    levels: normalizeStringArray(result?.levels),
-    ecu: String(result?.ecu || ''),
-    apid: String(result?.apid || ''),
-    ctid: String(result?.ctid || ''),
-    from_time: String(result?.from_time || ''),
-    to_time: String(result?.to_time || ''),
-    keywords: normalizeStringArray(result?.keywords)
-  };
-}
-
 function normalizeSequenceResult(result) {
   return {
     summary: stringOrFallback(result?.summary, ''),
@@ -614,7 +562,6 @@ module.exports = {
   AiClient,
   hasUsableAiConfig,
   DIAGNOSTIC_SCHEMA,
-  NATURAL_SEARCH_SCHEMA,
   SEQUENCE_SCHEMA,
   SCRIPT_SCHEMA
 };

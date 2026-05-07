@@ -72,7 +72,6 @@ contextBridge.exposeInMainWorld('nexusApi', {
   listAiModels: (config) => ipcRenderer.invoke('ai:list-models', config),
   analyzeWithAi: (payload) => ipcRenderer.invoke('ai:analyze', payload),
   chatWithAi: (payload) => ipcRenderer.invoke('ai:chat', payload),
-  naturalSearch: (payload) => ipcRenderer.invoke('ai:natural-search', payload),
   sequenceDiagram: (payload) => ipcRenderer.invoke('ai:sequence', payload),
   reproductionScript: (payload) => ipcRenderer.invoke('ai:script', payload),
 

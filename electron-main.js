@@ -5,7 +5,7 @@ const path = require('node:path');
 const { Worker } = require('node:worker_threads');
 
 const { AiClient, hasUsableAiConfig } = require('./src/services/aiClient');
-const { buildAnalysisPayload, buildChatPayload, buildNaturalSearchPayload, buildSequencePayload, buildScriptPayload } = require('./src/services/contextBuilder');
+const { buildAnalysisPayload, buildChatPayload, buildSequencePayload, buildScriptPayload } = require('./src/services/contextBuilder');
 const { RagStore } = require('./src/services/ragStore');
 const { writeExportFile } = require('./src/services/exporter');
 const { decryptEncArchive } = require('./src/services/encDecryptor');
@@ -360,7 +360,7 @@ async function decryptAndSelectLogFiles(encPath) {
   const decrypted = await decryptEncArchive({
     inputPath: encPath,
     appRoot: APP_ROOT,
-    outputRoot: path.dirname(encPath)
+    outputRoot: decryptedEncOutputRoot()
   });
 
   sendParseEvent({
@@ -371,8 +371,8 @@ async function decryptAndSelectLogFiles(encPath) {
     files: decrypted.candidates
   });
 
-  if (decrypted.candidates.length <= 1) {
-    return decrypted.candidates;
+  if (!decrypted.candidates.length) {
+    return [];
   }
 
   const result = await dialog.showOpenDialog(mainWindow, {
@@ -387,6 +387,10 @@ async function decryptAndSelectLogFiles(encPath) {
   });
 
   return result.canceled ? [] : result.filePaths;
+}
+
+function decryptedEncOutputRoot() {
+  return path.join(app.getPath('userData'), 'decrypted-enc');
 }
 
 app.setAppUserModelId('com.bltn.analysis-log');
@@ -604,18 +608,6 @@ ipcMain.handle('ai:chat', async (_event, request) => {
   const payload = buildChatPayload(request, ragDocs, effectiveConfig);
   const result = await new AiClient(effectiveConfig).chat(payload);
   return { ok: true, result, ragDocs, promptStats: payload.promptStats };
-});
-
-ipcMain.handle('ai:natural-search', async (_event, request) => {
-  const config = readConfigInternal();
-  if (!hasUsableAiConfig(config)) {
-    return { ok: false, error: 'AI config is missing base URL, model, or API key.' };
-  }
-
-  const ragDocs = buildSystemSpaceDocs(request.query || '', 4);
-  const payload = buildNaturalSearchPayload(request, ragDocs);
-  const result = await new AiClient(config).naturalSearch(payload);
-  return { ok: true, result, ragDocs };
 });
 
 ipcMain.handle('ai:sequence', async (_event, request) => {

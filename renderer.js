@@ -15,6 +15,9 @@ const MIN_LOG_COLUMNS = [42, 72, 52, 180];
 const STAR_ANIMATION_FRAME_MS = 80;
 const BG_STAR_COUNT = 90;
 const FALLING_STAR_COUNT = 10;
+const SEARCH_HOLD_START_DELAY_MS = 160;
+const SEARCH_HOLD_REPEAT_MS = 38;
+const PRIMARY_SEARCH_ID = 'primary';
 const DEFAULT_RUNTIME_MODEL = 'gpt-5.3-codex-xhigh';
 const DEFAULT_QUICK_AI_MODEL = DEFAULT_RUNTIME_MODEL;
 const DEFAULT_AI_CHAT_MODE = 'filtered';
@@ -77,7 +80,6 @@ const state = {
   currentPage: 1,
   pageSize: 'all',
   levelFilter: null,
-  naturalFilter: null,
   parseDone: false,
   aiConfig: null,
   aiConfigUnlocked: false,
@@ -85,7 +87,13 @@ const state = {
   aiConversationHistory: [],
   aiSending: false,
   quickAiPendingId: null,
-  naturalSearching: false,
+  searchMatches: [],
+  activeSearchMatch: -1,
+  extraSearchTerms: [],
+  searchTermSeq: 0,
+  searchHoldDelayTimer: null,
+  searchHoldRepeatTimer: null,
+  suppressSearchNavClick: false,
   aiGuidance: loadTextSetting('bltn-ai-guidance'),
   aiRange: {
     unit: 'time',
@@ -96,7 +104,7 @@ const state = {
     dirty: false
   },
   filterRange: {
-    unit: 'time',
+    unit: 'id',
     min: null,
     max: null,
     from: null,
@@ -146,12 +154,16 @@ const el = {
   statSpan: document.getElementById('stat-span'),
   docsStatus: document.getElementById('docs-status'),
   searchInput: document.getElementById('search-input'),
+  btnAddSearch: document.getElementById('btn-add-search'),
   searchFullToggle: document.getElementById('search-full-toggle'),
+  searchMatchBar: document.getElementById('search-match-bar'),
+  searchMatchCount: document.getElementById('search-match-count'),
+  btnSearchPrevMatch: document.getElementById('btn-search-prev-match'),
+  btnSearchNextMatch: document.getElementById('btn-search-next-match'),
+  extraSearchList: document.getElementById('extra-search-list'),
   searchField: document.getElementById('search-field'),
   caseSensitive: document.getElementById('case-sensitive'),
   regexSearch: document.getElementById('regex-search'),
-  naturalQuery: document.getElementById('natural-query'),
-  btnNatural: document.getElementById('btn-natural'),
   pageSize: document.getElementById('page-size'),
   btnPrev: document.getElementById('btn-prev'),
   btnNext: document.getElementById('btn-next'),
@@ -346,11 +358,12 @@ function wireEvents() {
     await handleDroppedPaths(paths);
   });
 
-  for (const item of [el.searchInput, el.timeFrom, el.timeTo].filter(Boolean)) {
+  wireSearchInput(el.searchInput, PRIMARY_SEARCH_ID);
+
+  for (const item of [el.timeFrom, el.timeTo].filter(Boolean)) {
     item.addEventListener('input', () => {
       state.currentPage = 1;
       state.levelFilter = null;
-      state.naturalFilter = null;
       applyFilters();
     });
     item.addEventListener('change', () => {
@@ -361,7 +374,11 @@ function wireEvents() {
   el.searchFullToggle.addEventListener('change', () => {
     state.currentPage = 1;
     applyFilters();
+    jumpToFirstSearchMatch(PRIMARY_SEARCH_ID);
   });
+  if (el.btnAddSearch) el.btnAddSearch.addEventListener('click', () => addSearchTerm(true));
+  wireSearchNavButton(el.btnSearchPrevMatch, PRIMARY_SEARCH_ID, -1);
+  wireSearchNavButton(el.btnSearchNextMatch, PRIMARY_SEARCH_ID, 1);
 
   if (el.pageSize) {
     el.pageSize.addEventListener('change', () => {
@@ -400,8 +417,6 @@ function wireEvents() {
     el.quickAiBaseUrl.addEventListener('change', () => refreshAiModelOptions({ quickModel: DEFAULT_QUICK_AI_MODEL }));
     el.quickAiKey.addEventListener('change', () => refreshAiModelOptions({ quickModel: el.quickAiModel.value || DEFAULT_QUICK_AI_MODEL }));
   }
-  el.btnNatural.addEventListener('click', runNaturalSearch);
-
   el.virtualScroll.addEventListener('scroll', handleVirtualScroll);
   el.rowsLayer.addEventListener('click', handleRowClick);
   el.timeline.addEventListener('click', handleTimelineClick);
@@ -413,8 +428,8 @@ function wireEvents() {
     el.searchInput.value = el.focusSearchInput.value;
     state.currentPage = 1;
     state.levelFilter = null;
-    state.naturalFilter = null;
     applyFilters();
+    jumpToFirstSearchMatch(PRIMARY_SEARCH_ID);
   });
   el.showFullTime.addEventListener('change', () => {
     state.showFullLogTime = el.showFullTime.checked;
@@ -446,6 +461,7 @@ function wireEvents() {
   });
 
   window.addEventListener('resize', () => scheduleRender());
+  window.addEventListener('blur', stopSearchNavHold);
   document.addEventListener('keydown', handleKeyboard);
 }
 
@@ -560,7 +576,6 @@ function closeFocusSearch() {
   el.btnFocusSearchClose.classList.add('hidden');
   state.currentPage = 1;
   state.levelFilter = null;
-  state.naturalFilter = null;
   applyFilters();
 }
 
@@ -1032,30 +1047,32 @@ function applyFilters(render = true) {
   const matcher = buildTextMatcher();
   const activeRange = getActiveFilterRange();
   const levelFilter = state.levelFilter;
-  const naturalFilter = state.naturalFilter;
 
   state.filtered = [];
   for (let index = 0; index < state.messages.length; index += 1) {
     const message = state.messages[index];
     if (levelFilter && levelFilter.size && !levelFilter.has(message.level)) continue;
-    if (naturalFilter && !messageMatchesNaturalFilter(message, naturalFilter)) continue;
     if (activeRange && !messageWithinFilterRange(message, activeRange)) continue;
     if (matcher && !matcher(message)) continue;
     state.filtered.push(index);
   }
 
+  updateSearchMatches();
   state.currentPage = Math.min(state.currentPage, getTotalPages());
   if (render) renderAll();
 }
 
 function buildTextMatcher() {
-  if (state.naturalFilter) {
-    return null;
-  }
   if (el.searchFullToggle.checked) {
     return null;
   }
-  const query = el.searchInput.value.trim();
+  const matchers = getActiveSearchMatchers();
+  if (!matchers.length) return null;
+  return (message) => matchers.some((matcher) => matcher(message));
+}
+
+function createSearchMatcher(value) {
+  const query = String(value || '').trim();
   if (!query) {
     return null;
   }
@@ -1085,6 +1102,305 @@ function buildSearchTargets(message) {
   ].map((value) => String(value ?? '')).filter(Boolean);
 }
 
+function getActiveSearchMatchers() {
+  return getSearchTerms()
+    .map((term) => createSearchMatcher(getSearchTermValue(term)))
+    .filter(Boolean);
+}
+
+function hasActiveSearchQueries() {
+  return getSearchTerms().some((term) => Boolean(getSearchTermValue(term)));
+}
+
+function getActiveSearchQueries() {
+  return Array.from(new Set(getSearchTerms()
+    .map((term) => getSearchTermValue(term))
+    .filter(Boolean)));
+}
+
+function getSearchTerms() {
+  const primary = getPrimarySearchTerm();
+  return [
+    primary,
+    ...state.extraSearchTerms
+  ].filter(Boolean);
+}
+
+function getPrimarySearchTerm() {
+  if (!el.searchInput) return null;
+  return {
+    id: PRIMARY_SEARCH_ID,
+    input: el.searchInput,
+    matchBar: el.searchMatchBar,
+    countEl: el.searchMatchCount,
+    prevBtn: el.btnSearchPrevMatch,
+    nextBtn: el.btnSearchNextMatch,
+    matches: state.searchMatches,
+    activeMatch: state.activeSearchMatch
+  };
+}
+
+function getSearchTermById(searchId) {
+  if (searchId === PRIMARY_SEARCH_ID) return getPrimarySearchTerm();
+  return state.extraSearchTerms.find((term) => term.id === searchId) || null;
+}
+
+function getSearchTermValue(term) {
+  return String(term?.input?.value || '').trim();
+}
+
+function getSearchTermMatches(term) {
+  return term?.id === PRIMARY_SEARCH_ID ? state.searchMatches : (term?.matches || []);
+}
+
+function getSearchTermActiveMatch(term) {
+  return term?.id === PRIMARY_SEARCH_ID ? state.activeSearchMatch : Number(term?.activeMatch ?? -1);
+}
+
+function setSearchTermMatches(term, matches, activeMatch) {
+  if (!term) return;
+  if (term.id === PRIMARY_SEARCH_ID) {
+    state.searchMatches = matches;
+    state.activeSearchMatch = activeMatch;
+    return;
+  }
+  term.matches = matches;
+  term.activeMatch = activeMatch;
+}
+
+function setSearchTermActiveMatch(term, activeMatch) {
+  if (!term) return;
+  if (term.id === PRIMARY_SEARCH_ID) {
+    state.activeSearchMatch = activeMatch;
+    return;
+  }
+  term.activeMatch = activeMatch;
+}
+
+function wireSearchInput(input, searchId) {
+  if (!input) return;
+  const handleInput = () => {
+    state.currentPage = 1;
+    state.levelFilter = null;
+    applyFilters();
+    jumpToFirstSearchMatch(searchId);
+  };
+  input.addEventListener('input', handleInput);
+  input.addEventListener('change', handleInput);
+}
+
+function addSearchTerm(focus = true) {
+  if (!el.extraSearchList) return null;
+  const searchId = `extra-${++state.searchTermSeq}`;
+  const item = document.createElement('div');
+  item.className = 'extra-search-item';
+  item.dataset.searchId = searchId;
+  item.innerHTML = `
+    <div class="search-group keyword-search-row extra-keyword-search-row">
+      <input class="input search extra-search-input" placeholder="Search another keyword...">
+      <button class="btn small remove-search-btn" type="button" title="Remove this keyword search">x</button>
+    </div>
+    <div class="search-match-bar">
+      <span class="search-match-count">No keyword</span>
+      <div class="search-match-actions">
+        <button class="btn small search-nav-btn search-prev-match" type="button" title="Previous keyword match">&uarr;</button>
+        <button class="btn small search-nav-btn search-next-match" type="button" title="Next keyword match">&darr;</button>
+      </div>
+    </div>
+  `;
+  el.extraSearchList.appendChild(item);
+
+  const term = {
+    id: searchId,
+    wrapper: item,
+    input: item.querySelector('.extra-search-input'),
+    matchBar: item.querySelector('.search-match-bar'),
+    countEl: item.querySelector('.search-match-count'),
+    prevBtn: item.querySelector('.search-prev-match'),
+    nextBtn: item.querySelector('.search-next-match'),
+    removeBtn: item.querySelector('.remove-search-btn'),
+    matches: [],
+    activeMatch: -1
+  };
+  state.extraSearchTerms.push(term);
+  wireSearchInput(term.input, searchId);
+  wireSearchNavButton(term.prevBtn, searchId, -1);
+  wireSearchNavButton(term.nextBtn, searchId, 1);
+  term.removeBtn.addEventListener('click', () => removeSearchTerm(searchId));
+  renderSearchNavigator(searchId);
+  if (focus) requestAnimationFrame(() => term.input.focus());
+  return term;
+}
+
+function removeSearchTerm(searchId) {
+  const index = state.extraSearchTerms.findIndex((term) => term.id === searchId);
+  if (index < 0) return;
+  stopSearchNavHold();
+  const [term] = state.extraSearchTerms.splice(index, 1);
+  if (term.wrapper) term.wrapper.remove();
+  state.currentPage = 1;
+  state.levelFilter = null;
+  applyFilters();
+}
+
+function clearExtraSearchTerms() {
+  stopSearchNavHold();
+  for (const term of state.extraSearchTerms) {
+    if (term.wrapper) term.wrapper.remove();
+  }
+  state.extraSearchTerms = [];
+  state.searchTermSeq = 0;
+}
+
+function updateSearchMatches() {
+  for (const term of getSearchTerms()) {
+    updateSearchTermMatches(term);
+  }
+}
+
+function updateSearchTermMatches(term) {
+  const matcher = createSearchMatcher(getSearchTermValue(term));
+  if (!matcher) {
+    setSearchTermMatches(term, [], -1);
+    return;
+  }
+
+  const matches = getSearchTermMatches(term);
+  const activeMatch = getSearchTermActiveMatch(term);
+  const previousMessageIndex = matches[activeMatch];
+  const selectedMessageIndex = state.messages.findIndex((message) => message.id === state.selectedId);
+  const nextMatches = [];
+  for (const messageIndex of state.filtered) {
+    const message = state.messages[messageIndex];
+    if (message && matcher(message)) nextMatches.push(messageIndex);
+  }
+
+  const selectedPosition = nextMatches.indexOf(selectedMessageIndex);
+  if (selectedPosition >= 0) {
+    setSearchTermMatches(term, nextMatches, selectedPosition);
+    return;
+  }
+
+  const previousPosition = nextMatches.indexOf(previousMessageIndex);
+  setSearchTermMatches(term, nextMatches, previousPosition >= 0
+    ? previousPosition
+    : (nextMatches.length ? 0 : -1));
+}
+
+function renderSearchNavigator(searchId = null) {
+  const terms = searchId ? [getSearchTermById(searchId)].filter(Boolean) : getSearchTerms();
+  for (const term of terms) {
+    renderSearchTermNavigator(term);
+  }
+}
+
+function renderSearchTermNavigator(term) {
+  if (!term?.countEl) return;
+  const query = getSearchTermValue(term);
+  const matches = getSearchTermMatches(term);
+  const count = matches.length;
+  const hasQuery = Boolean(query);
+  const hasMatches = hasQuery && count > 0;
+  const activeMatch = getSearchTermActiveMatch(term);
+  const position = hasMatches ? clampNumber(activeMatch, 0, count - 1) + 1 : 0;
+
+  if (term.matchBar) term.matchBar.classList.toggle('has-matches', hasMatches);
+  term.countEl.textContent = !hasQuery
+    ? 'No keyword'
+    : `${formatNumber(count)} keyword match${count === 1 ? '' : 'es'}${hasMatches ? ` (${formatNumber(position)}/${formatNumber(count)})` : ''}`;
+  if (term.prevBtn) term.prevBtn.disabled = !hasMatches;
+  if (term.nextBtn) term.nextBtn.disabled = !hasMatches;
+}
+
+function jumpToFirstSearchMatch(searchId = PRIMARY_SEARCH_ID) {
+  const term = getSearchTermById(searchId);
+  if (!term || !getSearchTermValue(term) || !getSearchTermMatches(term).length) {
+    renderSearchNavigator(searchId);
+    return;
+  }
+  jumpToSearchMatch(searchId, 0);
+}
+
+function moveSearchMatch(searchId, delta) {
+  const term = getSearchTermById(searchId);
+  const matches = getSearchTermMatches(term);
+  if (!term || !matches.length) return;
+  const activeMatch = getSearchTermActiveMatch(term);
+  const current = activeMatch >= 0 ? activeMatch : (delta < 0 ? 0 : -1);
+  jumpToSearchMatch(searchId, current + delta);
+}
+
+function wireSearchNavButton(button, searchId, delta) {
+  if (!button) return;
+  button.addEventListener('click', (event) => {
+    if (state.suppressSearchNavClick) {
+      state.suppressSearchNavClick = false;
+      event.preventDefault();
+      return;
+    }
+    moveSearchMatch(searchId, delta);
+  });
+  button.addEventListener('pointerdown', (event) => {
+    if (button.disabled || (event.button !== undefined && event.button !== 0)) return;
+    event.preventDefault();
+    if (typeof button.setPointerCapture === 'function' && event.pointerId !== undefined) {
+      try {
+        button.setPointerCapture(event.pointerId);
+      } catch (_error) {
+        // Pointer capture is a convenience; navigation still works without it.
+      }
+    }
+    startSearchNavHold(searchId, delta);
+  });
+  button.addEventListener('pointerup', stopSearchNavHold);
+  button.addEventListener('pointercancel', stopSearchNavHold);
+  button.addEventListener('lostpointercapture', stopSearchNavHold);
+  button.addEventListener('blur', stopSearchNavHold);
+}
+
+function startSearchNavHold(searchId, delta) {
+  stopSearchNavHold();
+  state.suppressSearchNavClick = true;
+  moveSearchMatch(searchId, delta);
+  state.searchHoldDelayTimer = setTimeout(() => {
+    state.searchHoldDelayTimer = null;
+    state.searchHoldRepeatTimer = setInterval(() => moveSearchMatch(searchId, delta), SEARCH_HOLD_REPEAT_MS);
+  }, SEARCH_HOLD_START_DELAY_MS);
+}
+
+function stopSearchNavHold() {
+  if (state.searchHoldDelayTimer) {
+    clearTimeout(state.searchHoldDelayTimer);
+    state.searchHoldDelayTimer = null;
+  }
+  if (state.searchHoldRepeatTimer) {
+    clearInterval(state.searchHoldRepeatTimer);
+    state.searchHoldRepeatTimer = null;
+  }
+  if (state.suppressSearchNavClick) {
+    setTimeout(() => {
+      state.suppressSearchNavClick = false;
+    }, 80);
+  }
+}
+
+function jumpToSearchMatch(searchId, position) {
+  const term = getSearchTermById(searchId);
+  const matches = getSearchTermMatches(term);
+  const count = matches.length;
+  if (!count) {
+    renderSearchNavigator(searchId);
+    return;
+  }
+  const index = ((Math.round(position) % count) + count) % count;
+  setSearchTermActiveMatch(term, index);
+  const message = state.messages[matches[index]];
+  if (message) {
+    selectMessage(message.id, true);
+  }
+  renderSearchNavigator(searchId);
+}
+
 function compactSearchText(value) {
   return normalizeSearchText(value).replace(/[^a-z0-9]+/g, '');
 }
@@ -1095,7 +1411,7 @@ function getActiveFilterRange() {
   const to = Number(state.filterRange.to);
   if (!Number.isFinite(from) || !Number.isFinite(to)) return null;
   return {
-    unit: state.filterRange.unit || 'time',
+    unit: 'id',
     from: Math.min(from, to),
     to: Math.max(from, to)
   };
@@ -1112,24 +1428,25 @@ function messageWithinFilterRange(message, range) {
 
 function hasActiveFilters() {
   return Boolean(
-    el.searchInput.value.trim() ||
+    hasActiveSearchQueries() ||
     state.filterRange.dirty ||
-    (state.levelFilter && state.levelFilter.size) ||
-    Boolean(state.naturalFilter)
+    (state.levelFilter && state.levelFilter.size)
   );
 }
 
 function resetFilters() {
   el.searchInput.value = '';
   if (el.focusSearchInput) el.focusSearchInput.value = '';
-  if (el.naturalQuery) el.naturalQuery.value = '';
-  el.searchFullToggle.checked = false;
+  clearExtraSearchTerms();
+  el.searchFullToggle.checked = true;
   resetFilterRange(false);
   if (el.caseSensitive) el.caseSensitive.checked = false;
   if (el.regexSearch) el.regexSearch.checked = false;
   if (el.searchField) el.searchField.value = 'payload-time';
   state.levelFilter = null;
-  state.naturalFilter = null;
+  state.searchMatches = [];
+  state.activeSearchMatch = -1;
+  state.searchTermSeq = 0;
   state.currentPage = 1;
   applyFilters();
 }
@@ -1180,6 +1497,7 @@ function renderParsingView() {
   applyLogColumnTemplate();
   renderStats();
   renderPagination();
+  renderSearchNavigator();
   renderVirtualRows();
 }
 
@@ -1187,6 +1505,7 @@ function renderAll() {
   applyLogColumnTemplate();
   renderStats();
   renderPagination();
+  renderSearchNavigator();
   renderVirtualRows();
   renderTimeline();
   renderMinimap();
@@ -1473,12 +1792,23 @@ function handleRowClick(event) {
 function selectMessage(id, ensureVisible) {
   if (!Number.isFinite(id)) return;
   state.selectedId = id;
+  const messageIndex = state.messages.findIndex((message) => message.id === id);
+  syncActiveSearchMatchesToMessage(messageIndex);
   if (ensureVisible) {
     scrollToMessage(id);
   }
   renderVirtualRows();
   renderDetail(getSelectedMessage());
+  renderSearchNavigator();
   updateChatRangeInfo();
+}
+
+function syncActiveSearchMatchesToMessage(messageIndex) {
+  if (!Number.isFinite(messageIndex) || messageIndex < 0) return;
+  for (const term of getSearchTerms()) {
+    const matchPosition = getSearchTermMatches(term).indexOf(messageIndex);
+    if (matchPosition >= 0) setSearchTermActiveMatch(term, matchPosition);
+  }
 }
 
 function scrollToMessage(id) {
@@ -1649,7 +1979,6 @@ function renderDetail(message) {
   el.detailPanel.innerHTML = `
     ${kv('File', message.fileName)}
     ${kv('Timestamp', message.time)}
-    <div class="raw-box">Payload\n${escapeHtml(message.payload || '')}</div>
   `;
 }
 
@@ -2011,7 +2340,7 @@ function buildUserGuideContent() {
     '',
     '## 1. Open and read logs',
     '- Click `Open DLT / ENC` or drop `.dlt`, `.enc`, `.log`, or `.bin` files into the app.',
-    '- `.enc` files are decrypted into a folder beside the source file; choose the extracted `.dlt` files from the folder dialog.',
+    '- `.enc` files are decrypted into the app data folder, then the app opens that extracted folder so you can choose the `.dlt` files.',
     '- Large logs are parsed in the background and rendered with virtual scrolling.',
     '- Use `Log AI Focus` to split the screen: logs on the left, AI Diagnostic Report on the right.',
     '',
@@ -2023,16 +2352,19 @@ function buildUserGuideContent() {
     '- Drag the header separators to resize columns.',
     '',
     '## 3. Search and filter',
-    '- The left panel has `Search / Filter` for payload/time search, Time Range, and AI Search.',
+    '- The left panel has `Search / Filter` for payload/time search and ID Range.',
+    '- Click `+` to add another keyword search box. Each search box has its own match counter and up/down buttons.',
+    '- `Full` is enabled by default, so all active searches highlight matches while keeping the current log view visible.',
+    '- Turn `Full` off to show rows that match any active keyword search.',
+    '- Extra search boxes have `x` to remove that keyword search.',
     '- In `Log AI Focus`, click the small `Search` button above the table for quick search.',
-    '- `AI Search` converts a natural-language query into a local filter.',
     '',
     '## 4. AI Diagnostic Report',
     '- Choose a mode beside `Send`: `Current line`, `Range`, `All current line`, or `Bug`.',
-    '- `Range` shows a two-handle time slider for the log window sent to AI.',
+    '- `Range` shows a two-handle time slider for the log window sent to AI; use `Switch` to change the range panel to ID mode.',
     '- `Potential Bug` sends the full log up to `Max AI messages`.',
     '- When `Send` is pressed, the button stays locked until AI returns a response or an error.',
-    '- The app sends only message id, payload, and `system_space` documentation to reduce tokens.',
+    '- The app sends only message id, `HH:mm:ss` time, payload, and `system_space` documentation to reduce tokens.',
     '- The default AI context limit is 27,000 messages. Change `Max AI messages` in `AI / RAG Config` if a provider needs a lower cap.',
     '',
     '## 5. AI prompt guidance',
@@ -2048,11 +2380,11 @@ function buildUserGuideContent() {
     '',
     '## 7. Export data',
     '- Use `Export CSV` in Search / Filter to save currently filtered rows.',
-    '- Click a row to inspect its payload in Message Detail.',
+    '- Click a row to inspect its file and timestamp in Message Detail.',
     '',
     '## 8. Notes',
     '- Non-verbose DLT requires FIBEX/ARXML mapping for complete payload decoding.',
-    '- If whole-log AI analysis is too slow, switch to `Time Range` to reduce context.'
+    '- If whole-log AI analysis is too slow, use search, ID Range, or AI Range to reduce context.'
   ].join('\n');
 }
 
@@ -2339,6 +2671,7 @@ function buildQuickAiQuestion(target, prompt) {
   return [
     'Explain only what this single DLT log message means. Do not diagnose a fault, root cause, impact, or reproduction unless the optional user prompt explicitly asks for it.',
     `Target message id: ${target.id}`,
+    `Target time: ${formatAiClockTime(target)}`,
     `Target payload: ${target.payload || ''}`,
     prompt ? `Optional user prompt:\n${prompt}` : ''
   ].filter(Boolean).join('\n');
@@ -2347,6 +2680,7 @@ function buildQuickAiQuestion(target, prompt) {
 function toQuickAiMessage(message, targetId) {
   return {
     id: message.id,
+    time: formatAiClockTime(message),
     payload: message.payload || ''
   };
 }
@@ -2617,26 +2951,14 @@ function applyFilterRangeValues() {
 }
 
 function syncFilterRangeFromHiddenInputs() {
-  const fromMs = resolveTimeInput(el.timeFrom.value, false);
-  const toMs = resolveTimeInput(el.timeTo.value, false);
-  if (Number.isFinite(fromMs) || Number.isFinite(toMs)) {
-    state.filterRange.unit = 'time';
-    clearRangeBounds('filter');
-    const bounds = getRangeBounds('time');
-    const fallbackFrom = bounds ? bounds.min : fromMs;
-    const fallbackTo = bounds ? bounds.max : toMs;
-    setFilterRange(
-      Number.isFinite(fromMs) ? fromMs : fallbackFrom,
-      Number.isFinite(toMs) ? toMs : fallbackTo,
-      true
-    );
-  } else if (!el.timeFrom.value && !el.timeTo.value) {
+  if (!el.timeFrom.value && !el.timeTo.value) {
     resetFilterRange(false);
   }
 }
 
 function toggleFilterRangeUnit() {
-  toggleRangeUnit('filter');
+  state.filterRange.unit = 'id';
+  syncFilterRangeControls();
   state.currentPage = 1;
   applyFilters();
 }
@@ -2699,8 +3021,8 @@ function syncRangeControls(kind) {
   const controls = getRangeControls(kind);
   if (!range || !controls.start || !controls.end) return;
 
-  range.unit = 'time';
-  const bounds = getRangeBounds('time');
+  range.unit = kind === 'filter' ? 'id' : (range.unit || 'time');
+  const bounds = getRangeBounds(range.unit);
   syncRangeModeUi(kind);
   if (!bounds) {
     controls.start.disabled = true;
@@ -2742,8 +3064,8 @@ function resetRangeToFull(kind) {
   const range = getRangeState(kind);
   if (!range) return false;
   range.dirty = false;
-  range.unit = 'time';
-  const bounds = getRangeBounds('time');
+  range.unit = kind === 'filter' ? 'id' : 'time';
+  const bounds = getRangeBounds(range.unit);
   if (!bounds) {
     range.from = null;
     range.to = null;
@@ -2757,7 +3079,7 @@ function resetRangeToFull(kind) {
 function setRangeValues(kind, from, to, dirty) {
   const range = getRangeState(kind);
   if (!range || !Number.isFinite(from) || !Number.isFinite(to)) return;
-  range.unit = 'time';
+  range.unit = kind === 'filter' ? 'id' : (range.unit || 'time');
   const bounds = getRangeBounds(range.unit) || {
     min: Math.min(from, to),
     max: Math.max(from, to)
@@ -2785,8 +3107,8 @@ function applyRangeValues(kind) {
   controls.toLabel.textContent = Number.isFinite(range.to) ? formatRangeValue(range.unit, to) : '-';
 
   if (kind === 'filter') {
-    el.timeFrom.value = range.dirty && range.unit === 'time' ? String(from) : '';
-    el.timeTo.value = range.dirty && range.unit === 'time' ? String(to) : '';
+    el.timeFrom.value = '';
+    el.timeTo.value = '';
   } else {
     el.aiChatFrom.value = String(from);
     el.aiChatTo.value = String(to);
@@ -2807,8 +3129,22 @@ function applyRangeValues(kind) {
 function toggleRangeUnit(kind) {
   const range = getRangeState(kind);
   if (!range) return;
-  range.unit = 'time';
-  syncRangeControls(kind);
+  const fromUnit = range.unit || 'time';
+  const toUnit = fromUnit === 'time' ? 'id' : 'time';
+  const bounds = getRangeBounds(toUnit);
+  if (!bounds) return;
+  const fallback = { from: bounds.min, to: bounds.max };
+  const converted = range.dirty
+    ? convertRangeValues(fromUnit, toUnit, range.from, range.to, fallback)
+    : fallback;
+
+  range.unit = toUnit;
+  range.min = bounds.min;
+  range.max = bounds.max;
+  range.from = clampNumber(converted.from, bounds.min, bounds.max);
+  range.to = clampNumber(converted.to, bounds.min, bounds.max);
+  normalizeRangeValues(range);
+  applyRangeValues(kind);
 }
 
 function clearRangeBounds(kind) {
@@ -2920,23 +3256,31 @@ function syncRangeModeUi(kind) {
   const range = getRangeState(kind);
   const controls = getRangeControls(kind);
   if (!range || !controls.title || !controls.button) return;
+  if (kind === 'filter') {
+    range.unit = 'id';
+    controls.title.textContent = 'ID Range';
+    controls.button.textContent = '';
+    controls.button.disabled = true;
+    controls.button.classList.add('hidden');
+    controls.button.classList.remove('active');
+    return;
+  }
   const unit = range.unit || 'time';
-  controls.title.textContent = kind === 'filter'
-    ? 'Time Range'
-    : 'AI time range';
-  controls.button.textContent = 'Time';
-  controls.button.classList.add('hidden');
-  controls.button.classList.remove('active');
+  controls.title.textContent = unit === 'id' ? 'AI ID range' : 'AI time range';
+  controls.button.textContent = unit === 'time' ? 'Switch' : 'Time';
+  controls.button.disabled = !state.messages.length || !getRangeBounds(unit === 'time' ? 'id' : 'time');
+  controls.button.classList.toggle('hidden', !state.messages.length);
+  controls.button.classList.toggle('active', unit === 'id');
 }
 
 function formatRangeValue(unit, value) {
   if (!Number.isFinite(value)) return '-';
-  return unit === 'id' ? `#${Math.round(value)}` : formatRangeClockLabel(value);
+  return unit === 'id' ? formatRangeIdLabel(value, true) : formatRangeClockLabel(value, true);
 }
 
 function formatRangeShortValue(unit, value) {
   if (!Number.isFinite(value)) return '-';
-  return unit === 'id' ? `#${Math.round(value)}` : formatRangeClockLabel(value);
+  return unit === 'id' ? formatRangeIdLabel(value, false) : formatRangeClockLabel(value, false);
 }
 
 function getRangeStep(unit, span) {
@@ -2990,6 +3334,7 @@ function countMessagesInIdRange(fromId, toId) {
 function toAiMessage(message) {
   return {
     id: message.id,
+    time: formatAiClockTime(message),
     payload: message.payload || ''
   };
 }
@@ -2997,6 +3342,7 @@ function toAiMessage(message) {
 function toCurrentLineAiMessage(message, selectedId) {
   return {
     id: message.id,
+    time: formatAiClockTime(message),
     payload: message.payload || ''
   };
 }
@@ -3005,8 +3351,9 @@ function formatAiClockTime(message) {
   const raw = String(message?.time || '');
   const match = raw.match(/\b\d{2}:\d{2}:\d{2}(?:\.\d+)?\b/);
   if (match) return match[0].split('.')[0];
-  if (Number.isFinite(message?.timeMs)) return formatHourMinuteSecond(message.timeMs);
-  return raw || '-';
+  const timeMs = Number(message?.timeMs);
+  if (Number.isFinite(timeMs)) return formatHourMinuteSecond(timeMs);
+  return '-';
 }
 
 function appendChatBubble(role, text, contextCount = null, docCount = null, docSourceCount = null, options = {}) {
@@ -3156,324 +3503,6 @@ function isSparseFallbackField(value, kind) {
   return false;
 }
 
-async function runNaturalSearch() {
-  if (state.naturalSearching) return;
-  const rawQuery = el.naturalQuery.value.trim();
-  if (!rawQuery) return;
-  const query = translateSearchQueryToEnglish(rawQuery);
-  if (query && query !== rawQuery) {
-    el.naturalQuery.value = query;
-  }
-  setNaturalSearchBusy(true);
-  setAiStatus('AI is converting the English search query into a filter...', false);
-  const localPlan = buildNaturalSearchPlan(query);
-  try {
-    const response = await api.naturalSearch({ query });
-    if (!response.ok) {
-      applyNaturalSearchPlan(localPlan, 'local', response.error);
-      return;
-    }
-    const aiPlan = normalizeNaturalPlan(response.result);
-    const mergedPlan = mergeNaturalPlans(aiPlan, localPlan);
-    applyNaturalSearchPlan(mergedPlan, isEmptyNaturalPlan(aiPlan) ? 'local-empty-ai' : 'ai');
-  } catch (error) {
-    applyNaturalSearchPlan(localPlan, 'local', error.message);
-  } finally {
-    setNaturalSearchBusy(false);
-  }
-}
-
-function setNaturalSearchBusy(isBusy) {
-  state.naturalSearching = Boolean(isBusy);
-  el.btnNatural.disabled = state.naturalSearching;
-  el.btnNatural.textContent = state.naturalSearching ? 'Searching...' : 'AI Search';
-}
-
-function localNaturalFallback(query) {
-  applyNaturalSearchPlan(buildNaturalSearchPlan(query), 'local');
-}
-
-function applyNaturalSearchPlan(plan, source, errorMessage = '') {
-  const safePlan = normalizeNaturalPlan(plan);
-  state.naturalFilter = buildRuntimeNaturalFilter(safePlan);
-  state.levelFilter = safePlan.levels.length ? new Set(safePlan.levels.map(normalizeLevelName)) : null;
-  state.currentPage = 1;
-
-  el.searchInput.value = safePlan.displayQuery;
-  el.searchFullToggle.checked = false;
-  if (el.searchField) el.searchField.value = 'payload-time';
-  if (el.caseSensitive) el.caseSensitive.checked = false;
-  if (el.regexSearch) el.regexSearch.checked = false;
-
-  if (safePlan.from_time) el.timeFrom.value = safePlan.from_time;
-  if (safePlan.to_time) el.timeTo.value = safePlan.to_time;
-  syncFilterRangeFromHiddenInputs();
-
-  applyFilters();
-  let relaxedBy = '';
-  if (state.filtered.length === 0 && state.levelFilter && state.levelFilter.size) {
-    state.levelFilter = null;
-    relaxedBy = 'Removed the level filter because no rows matched; keyword/concept filters remain active.';
-    applyFilters();
-  }
-  const report = {
-    source,
-    explanation: safePlan.explanation,
-    display_query: safePlan.displayQuery,
-    levels: relaxedBy ? [] : safePlan.levels,
-    keywords: safePlan.keywords,
-    required_groups: safePlan.requiredGroups,
-    optional_terms: safePlan.optionalTerms,
-    field_terms: safePlan.fieldTerms,
-    matched_rows: state.filtered.length,
-    relaxed_by: relaxedBy,
-    error: errorMessage || ''
-  };
-  const prefix = source === 'ai' ? 'Applied AI Search' : 'Applied smart local search';
-  const suffix = errorMessage ? ` Fallback reason: ${errorMessage}` : '';
-  const detail = report.relaxed_by ? ` ${report.relaxed_by}` : '';
-  setAiStatus(`${prefix}: found ${formatNumber(state.filtered.length)} row(s).${suffix}${detail}`, state.filtered.length === 0);
-}
-
-function buildNaturalSearchPlan(query) {
-  const raw = String(query || '').trim();
-  const normalized = normalizeSearchText(raw);
-  const levels = detectNaturalLevels(normalized);
-  const concepts = detectNaturalConcepts(normalized);
-  const fieldTerms = detectNaturalFieldTerms(raw);
-  const numericTerms = raw.match(/\b\d+(?:[.,]\d+)?\b/g) || [];
-  const directTerms = tokenizeNaturalQuery(raw)
-    .filter((term) => !NATURAL_STOP_WORDS.has(term))
-    .filter((term) => term.length >= 3 || /^\d+$/.test(term));
-
-  const optionalTerms = uniqueStrings([
-    ...concepts.flatMap((concept) => concept.terms),
-    ...directTerms,
-    ...numericTerms
-  ]).slice(0, 80);
-
-  const requiredGroups = concepts.map((concept) => ({
-    label: concept.label,
-    terms: concept.terms
-  }));
-  const displayQuery = buildNaturalDisplayQuery(optionalTerms, levels, fieldTerms);
-
-  return {
-    explanation: concepts.length
-      ? `Detected ${concepts.map((concept) => concept.label).join(', ')} from the natural-language query.`
-      : 'Extracted keywords from the natural-language query for log search.',
-    search_text: displayQuery,
-    regex: false,
-    case_sensitive: false,
-    levels,
-    ecu: fieldTerms.ecu || '',
-    apid: fieldTerms.apid || '',
-    ctid: fieldTerms.ctid || '',
-    from_time: '',
-    to_time: '',
-    keywords: optionalTerms,
-    displayQuery,
-    requiredGroups,
-    optionalTerms,
-    fieldTerms
-  };
-}
-
-function normalizeNaturalPlan(plan) {
-  const result = plan || {};
-  const keywords = uniqueStrings([
-    ...normalizeStringList(result.keywords),
-    ...tokenizeNaturalQuery(result.search_text || result.query || '')
-  ]).filter((term) => term.length >= 2);
-  const fieldTerms = {
-    ecu: String(result.ecu || result.fieldTerms?.ecu || '').trim(),
-    apid: String(result.apid || result.fieldTerms?.apid || '').trim(),
-    ctid: String(result.ctid || result.fieldTerms?.ctid || '').trim()
-  };
-  const optionalTerms = uniqueStrings([
-    ...normalizeStringList(result.optionalTerms),
-    ...keywords,
-    ...Object.values(fieldTerms).filter(Boolean)
-  ]);
-  const requiredGroups = Array.isArray(result.requiredGroups)
-    ? result.requiredGroups.map((group) => ({
-      label: String(group.label || 'group'),
-      terms: normalizeStringList(group.terms)
-    })).filter((group) => group.terms.length)
-    : [];
-  const displayQuery = String(result.displayQuery || result.search_text || optionalTerms.slice(0, 18).join(' ')).trim();
-
-  return {
-    explanation: String(result.explanation || ''),
-    search_text: String(result.search_text || displayQuery),
-    regex: Boolean(result.regex),
-    case_sensitive: Boolean(result.case_sensitive),
-    levels: normalizeStringList(result.levels).map(normalizeLevelName).filter(Boolean),
-    ecu: fieldTerms.ecu,
-    apid: fieldTerms.apid,
-    ctid: fieldTerms.ctid,
-    from_time: String(result.from_time || ''),
-    to_time: String(result.to_time || ''),
-    keywords: optionalTerms,
-    displayQuery,
-    requiredGroups,
-    optionalTerms,
-    fieldTerms
-  };
-}
-
-function mergeNaturalPlans(aiPlan, localPlan) {
-  if (isEmptyNaturalPlan(aiPlan)) {
-    return localPlan;
-  }
-  const normalizedAi = normalizeNaturalPlan(aiPlan);
-  const normalizedLocal = normalizeNaturalPlan(localPlan);
-  const fieldTerms = {
-    ecu: normalizedAi.ecu || normalizedLocal.ecu,
-    apid: normalizedAi.apid || normalizedLocal.apid,
-    ctid: normalizedAi.ctid || normalizedLocal.ctid
-  };
-
-  return {
-    ...normalizedAi,
-    explanation: normalizedAi.explanation || normalizedLocal.explanation,
-    levels: uniqueStrings([...normalizedAi.levels, ...normalizedLocal.levels]).map(normalizeLevelName),
-    keywords: uniqueStrings([...normalizedAi.keywords, ...normalizedLocal.keywords]),
-    optionalTerms: uniqueStrings([...normalizedAi.optionalTerms, ...normalizedLocal.optionalTerms]),
-    requiredGroups: normalizedAi.requiredGroups.length ? normalizedAi.requiredGroups : normalizedLocal.requiredGroups,
-    fieldTerms,
-    ecu: fieldTerms.ecu,
-    apid: fieldTerms.apid,
-    ctid: fieldTerms.ctid,
-    displayQuery: normalizedAi.displayQuery || normalizedLocal.displayQuery
-  };
-}
-
-function isEmptyNaturalPlan(plan) {
-  const normalized = normalizeNaturalPlan(plan);
-  return !normalized.keywords.length &&
-    !normalized.levels.length &&
-    !normalized.ecu &&
-    !normalized.apid &&
-    !normalized.ctid &&
-    !normalized.from_time &&
-    !normalized.to_time;
-}
-
-function buildRuntimeNaturalFilter(plan) {
-  const normalized = normalizeNaturalPlan(plan);
-  return {
-    ...normalized,
-    optionalTerms: uniqueStrings(normalized.optionalTerms.map(normalizeSearchText).filter(Boolean)),
-    requiredGroups: normalized.requiredGroups.map((group) => ({
-      ...group,
-      terms: uniqueStrings(group.terms.map(normalizeSearchText).filter(Boolean))
-    })).filter((group) => group.terms.length),
-    fieldTerms: {
-      ecu: normalizeSearchText(normalized.fieldTerms.ecu),
-      apid: normalizeSearchText(normalized.fieldTerms.apid),
-      ctid: normalizeSearchText(normalized.fieldTerms.ctid)
-    }
-  };
-}
-
-function messageMatchesNaturalFilter(message, filter) {
-  const haystack = normalizeSearchText([
-    message.payload,
-    message.payloadAscii,
-    message.level,
-    message.type,
-    message.subtype,
-    message.ecu,
-    message.apid,
-    message.ctid,
-    message.fileName,
-    message.messageId,
-    message.time
-  ].join(' '));
-
-  if (filter.fieldTerms.ecu && !normalizeSearchText(message.ecu).includes(filter.fieldTerms.ecu)) return false;
-  if (filter.fieldTerms.apid && !normalizeSearchText(message.apid).includes(filter.fieldTerms.apid)) return false;
-  if (filter.fieldTerms.ctid && !normalizeSearchText(message.ctid).includes(filter.fieldTerms.ctid)) return false;
-
-  if (!filter.optionalTerms.length && !filter.requiredGroups.length) {
-    return true;
-  }
-
-  let score = 0;
-  for (const group of filter.requiredGroups) {
-    if (group.terms.some((term) => haystack.includes(term))) {
-      score += 2;
-    }
-  }
-  for (const term of filter.optionalTerms) {
-    if (haystack.includes(term)) {
-      score += 1;
-    }
-  }
-  return score > 0;
-}
-
-function detectNaturalLevels(normalizedQuery) {
-  const levels = [];
-  if (/\b(fatal|nghiem trong|critical|crash|panic)\b/.test(normalizedQuery)) levels.push('Fatal', 'Error');
-  if (/\b(error|err|fault|failure|failed)\b/.test(normalizedQuery)) levels.push('Error');
-  if (/\b(warn|warning|canh bao)\b/.test(normalizedQuery)) levels.push('Warn');
-  if (/\b(info|thong tin)\b/.test(normalizedQuery)) levels.push('Info');
-  if (/\b(debug|trace|verbose)\b/.test(normalizedQuery)) levels.push('Debug', 'Trace', 'Verbose');
-  return uniqueStrings(levels);
-}
-
-function detectNaturalConcepts(normalizedQuery) {
-  const concepts = [];
-  for (const concept of NATURAL_CONCEPTS) {
-    if (concept.triggers.some((trigger) => normalizedQuery.includes(trigger))) {
-      concepts.push(concept);
-    }
-  }
-  return concepts;
-}
-
-function detectNaturalFieldTerms(query) {
-  const result = {};
-  const patterns = [
-    ['ecu', /\bECU\s*[:=]?\s*([A-Za-z0-9_-]{2,8})/i],
-    ['apid', /\bAPID\s*[:=]?\s*([A-Za-z0-9_-]{2,8})/i],
-    ['ctid', /\bCTID\s*[:=]?\s*([A-Za-z0-9_-]{2,8})/i]
-  ];
-  for (const [field, pattern] of patterns) {
-    const match = query.match(pattern);
-    if (match) result[field] = match[1];
-  }
-  return result;
-}
-
-function buildNaturalDisplayQuery(terms, levels, fieldTerms) {
-  const parts = [];
-  if (levels.length) parts.push(`level:${levels.join('|')}`);
-  if (fieldTerms.ecu) parts.push(`ecu:${fieldTerms.ecu}`);
-  if (fieldTerms.apid) parts.push(`apid:${fieldTerms.apid}`);
-  if (fieldTerms.ctid) parts.push(`ctid:${fieldTerms.ctid}`);
-  parts.push(...terms.slice(0, 18));
-  return parts.join(' ');
-}
-
-function tokenizeNaturalQuery(value) {
-  return normalizeSearchText(value)
-    .split(/[^a-z0-9_.-]+/g)
-    .map((term) => term.trim())
-    .filter(Boolean);
-}
-
-function normalizeStringList(value) {
-  if (!Array.isArray(value)) return [];
-  return value.map((item) => String(item || '').trim()).filter(Boolean);
-}
-
-function uniqueStrings(values) {
-  return Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean)));
-}
-
 function normalizeSearchText(value) {
   return String(value || '')
     .toLowerCase()
@@ -3483,126 +3512,6 @@ function normalizeSearchText(value) {
     .replace(/\s+/g, ' ')
     .trim();
 }
-
-function translateSearchQueryToEnglish(value) {
-  let text = normalizeSearchText(value);
-  if (!text) return '';
-
-  const phraseMap = [
-    ['rot frame', 'dropped frame'],
-    ['drop frame', 'dropped frame'],
-    ['mat frame', 'lost frame'],
-    ['roi frame', 'dropped frame'],
-    ['nhiet do', 'temperature'],
-    ['qua nhiet', 'overheat'],
-    ['dien ap', 'voltage'],
-    ['nguon', 'power'],
-    ['khong phan hoi', 'no response'],
-    ['khong tra loi', 'no response'],
-    ['ma loi', 'dtc'],
-    ['chan doan', 'diagnostic'],
-    ['khoi dong lai', 'reboot'],
-    ['khoi dong', 'startup'],
-    ['tat may', 'shutdown'],
-    ['the nho', 'storage card'],
-    ['bo nho', 'memory'],
-    ['tim cho toi', 'search'],
-    ['tim kiem', 'search']
-  ];
-  for (const [source, target] of phraseMap) {
-    text = text.replace(new RegExp(`\\b${escapeRegExp(source)}\\b`, 'g'), target);
-  }
-
-  const wordMap = {
-    loi: 'error',
-    hong: 'fail',
-    fail: 'fail',
-    failed: 'failed',
-    treo: 'hang',
-    cham: 'slow',
-    tre: 'delay',
-    nong: 'hot',
-    mat: 'lost',
-    roi: 'drop',
-    reset: 'reset',
-    reboot: 'reboot',
-    camera: 'camera',
-    cam: 'camera',
-    file: 'file',
-    sd: 'sd',
-    canh: 'warning',
-    bao: 'warning',
-    timeout: 'timeout',
-    dtc: 'dtc',
-    uds: 'uds'
-  };
-
-  const translated = text
-    .split(/[^a-z0-9_.-]+/g)
-    .map((term) => wordMap[term] || term)
-    .filter((term) => term && !NATURAL_TRANSLATION_STOP_WORDS.has(term));
-  return uniqueStrings(translated).join(' ') || String(value || '').trim();
-}
-
-const NATURAL_STOP_WORDS = new Set([
-  'tim', 'kiem', 'cho', 'toi', 'nhung', 'luc', 'khi', 'sau', 'truoc', 'trong', 'khoang',
-  'cac', 'dong', 'log', 'message', 'ban', 'tin', 'co', 'bi', 'va', 'hoac', 'neu', 'thi',
-  'the', 'nao', 'hay', 'giup', 'minh', 'cua', 'ecu', 'app'
-]);
-
-const NATURAL_TRANSLATION_STOP_WORDS = new Set([
-  'search', 'tim', 'kiem', 'cho', 'toi', 'minh', 'hay', 'giup', 'cac', 'nhung',
-  'dong', 'log', 'message', 'ban', 'tin', 'co', 'bi', 'va', 'hoac', 'khi',
-  'sau', 'truoc', 'trong', 'khoang', 'cua', 'thi', 'la'
-]);
-
-const NATURAL_CONCEPTS = [
-  {
-    label: 'camera/frame/FPS',
-    triggers: ['camera', 'cam', 'frame', 'fps', 'rot frame', 'drop frame', 'mat frame'],
-    terms: ['camera', 'cam', 'frame', 'fps', 'drop', 'dropped', 'lost', 'miss', 'timeout', 'sensor', 'isp', 'lvds']
-  },
-  {
-    label: 'temperature/thermal',
-    triggers: ['nhiet do', 'qua nhiet', 'nong', 'temperature', 'temp', 'thermal', 'overheat'],
-    terms: ['temperature', 'temp', 'thermal', 'overheat', 'hot', 'nhiet', 'nong']
-  },
-  {
-    label: 'voltage/power',
-    triggers: ['dien ap', 'nguon', 'voltage', 'volt', '12v', 'undervoltage', 'overvoltage', 'power'],
-    terms: ['voltage', 'volt', 'power', 'undervoltage', 'overvoltage', 'battery', '12v', 'acc', 'ign']
-  },
-  {
-    label: 'timeout/hang/slow response',
-    triggers: ['timeout', 'time out', 'treo', 'khong phan hoi', 'delay', 'latency', 'hang'],
-    terms: ['timeout', 'time out', 'delay', 'latency', 'expired', 'hang', 'blocked', 'stuck', 'no response']
-  },
-  {
-    label: 'DTC/UDS/diagnostic',
-    triggers: ['dtc', 'uds', 'diagnostic', 'ma loi', 'chan doan'],
-    terms: ['dtc', 'uds', 'diagnostic', 'diag', '0x19', '0x22', '0x2e', '0x10', '0x27', 'nrc']
-  },
-  {
-    label: 'SD/storage',
-    triggers: ['sd', 'storage', 'the nho', 'memory card', 'microsd', 'file'],
-    terms: ['sd', 'storage', 'card', 'microsd', 'memory', 'mount', 'unmount', 'write', 'read', 'file']
-  },
-  {
-    label: 'PMD/parking',
-    triggers: ['pmd', 'parking', 'motion', 'radar', 'do xe'],
-    terms: ['pmd', 'parking', 'motion', 'radar', 'parked', 'event']
-  },
-  {
-    label: 'reset/reboot/ignition',
-    triggers: ['reset', 'reboot', 'restart', 'ignition', 'key on', 'key off', 'khoi dong'],
-    terms: ['reset', 'reboot', 'restart', 'ignition', 'key', 'startup', 'shutdown', 'power cycle']
-  },
-  {
-    label: 'network/CAN/Ethernet/SOMEIP',
-    triggers: ['can', 'canfd', 'ethernet', 'someip', 'some/ip', 'network', 'bus', 'ethnm'],
-    terms: ['can', 'canfd', 'ethernet', 'someip', 'some/ip', 'network', 'bus', 'ethnm', 'timeout']
-  }
-];
 
 async function generateSequence() {
   const range = selectedRange();
@@ -3983,10 +3892,13 @@ function clearData() {
   state.lastTimeMs = null;
   state.currentPage = 1;
   state.levelFilter = null;
-  state.naturalFilter = null;
   state.parseDone = false;
   state.aiChatMode = DEFAULT_AI_CHAT_MODE;
   state.quickAiPendingId = null;
+  clearExtraSearchTerms();
+  state.searchMatches = [];
+  state.activeSearchMatch = -1;
+  state.searchTermSeq = 0;
   state.lastParseRenderAt = 0;
   state.aiRange = {
     unit: 'time',
@@ -3997,7 +3909,7 @@ function clearData() {
     dirty: false
   };
   state.filterRange = {
-    unit: 'time',
+    unit: 'id',
     min: null,
     max: null,
     from: null,
@@ -4031,21 +3943,58 @@ function setupCanvas(canvas) {
 
 function highlightSearch(value) {
   const text = String(value ?? '');
-  const query = el.searchInput.value.trim();
-  if (!query) return escapeHtml(text);
-  const escaped = escapeHtml(text);
-  const safe = escapeRegExp(query);
-  const exactRegex = new RegExp(safe, 'gi');
-  if (exactRegex.test(text)) {
-    exactRegex.lastIndex = 0;
-    return escaped.replace(exactRegex, (match) => `<mark>${match}</mark>`);
+  const queries = getActiveSearchQueries();
+  if (!queries.length) return escapeHtml(text);
+
+  const ranges = [];
+  let hasCompactOnlyMatch = false;
+  for (const query of queries) {
+    const exactRegex = new RegExp(escapeRegExp(query), 'gi');
+    let hasExactMatch = false;
+    let match;
+    while ((match = exactRegex.exec(text)) !== null) {
+      hasExactMatch = true;
+      ranges.push([match.index, match.index + match[0].length]);
+    }
+    if (!hasExactMatch) {
+      const compactNeedle = compactSearchText(query);
+      if (compactNeedle && compactSearchText(text).includes(compactNeedle)) {
+        hasCompactOnlyMatch = true;
+      }
+    }
   }
 
-  const compactNeedle = compactSearchText(query);
-  if (compactNeedle && compactSearchText(text).includes(compactNeedle)) {
-    return `<mark>${escaped}</mark>`;
+  if (hasCompactOnlyMatch) {
+    return `<mark>${escapeHtml(text)}</mark>`;
   }
-  return escaped;
+
+  if (!ranges.length) return escapeHtml(text);
+  return renderHighlightedRanges(text, ranges);
+}
+
+function renderHighlightedRanges(text, ranges) {
+  const merged = ranges
+    .filter(([start, end]) => end > start)
+    .sort((a, b) => a[0] - b[0])
+    .reduce((result, range) => {
+      const previous = result[result.length - 1];
+      if (previous && range[0] <= previous[1]) {
+        previous[1] = Math.max(previous[1], range[1]);
+      } else {
+        result.push(range.slice());
+      }
+      return result;
+    }, []);
+
+  let html = '';
+  let cursor = 0;
+  for (const [start, end] of merged) {
+    html += escapeHtml(text.slice(cursor, start));
+    html += `<mark>${escapeHtml(text.slice(start, end))}</mark>`;
+    cursor = end;
+  }
+  html += escapeHtml(text.slice(cursor));
+  return html;
 }
 
 function escapeHtml(value) {
@@ -4113,14 +4062,25 @@ function formatHourMinuteSecond(ms) {
   return new Date(ms).toISOString().slice(11, 19);
 }
 
-function formatRangeClockLabel(ms) {
+function formatRangeIdLabel(value, includeSeconds) {
+  const id = Math.round(value);
+  const message = state.messages.find((item) => Number(item.id) === id);
+  const time = message ? formatRangeClockLabel(getMessageRangeTimeMs(message), includeSeconds) : '';
+  return time ? `#${id} ${time}` : `#${id}`;
+}
+
+function formatRangeClockLabel(ms, includeSeconds = true) {
   if (!Number.isFinite(ms)) return '-';
   const value = ((Math.floor(ms) % DAY_MS) + DAY_MS) % DAY_MS;
+  const day = Math.floor(Math.max(0, Math.floor(ms)) / DAY_MS) + 1;
   const totalSeconds = Math.floor(value / 1000);
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
-  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  const clock = includeSeconds
+    ? `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+    : `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+  return `D${day} ${clock}`;
 }
 
 function parseClockTimeOfDayMs(value) {
@@ -4164,11 +4124,6 @@ function saveTextSetting(key, value) {
 
 function shortPath(filePath) {
   return String(filePath || '').split(/[\\/]/).slice(-2).join('\\');
-}
-
-function normalizeLevelName(level) {
-  const text = String(level || '').toLowerCase();
-  return LEVELS.find((item) => item.toLowerCase() === text) || level;
 }
 
 function formatBytes(bytes) {
