@@ -12,6 +12,10 @@ const { decryptEncArchive } = require('./src/services/encDecryptor');
 
 const APP_ROOT = __dirname;
 const UPDATE_CHECK_DELAY_MS = 5000;
+const DEFAULT_ZOOM_FACTOR = 1;
+const MIN_ZOOM_FACTOR = 0.6;
+const MAX_ZOOM_FACTOR = 1.8;
+const ZOOM_STEP = 0.1;
 const DEFAULT_STRONG_AI_MODEL = 'gpt-5.3-codex-xhigh';
 const AI_DEFAULTS_VERSION = 5;
 const PREVIOUS_DEFAULT_STRONG_AI_MODELS = new Set([
@@ -77,7 +81,53 @@ function createWindow() {
 
   mainWindow.setMenuBarVisibility(false);
   mainWindow.setAutoHideMenuBar(true);
+  wireWindowShortcuts(mainWindow);
   mainWindow.loadFile(path.join(APP_ROOT, 'index.html'));
+}
+
+function wireWindowShortcuts(window) {
+  window.webContents.on('did-finish-load', () => {
+    setWindowZoom(window, DEFAULT_ZOOM_FACTOR);
+  });
+  window.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || !(input.control || input.meta)) return;
+    const key = String(input.key || '').toLowerCase();
+    const code = String(input.code || '');
+    if (key === '+' || key === '=' || code === 'Equal' || code === 'NumpadAdd') {
+      event.preventDefault();
+      setWindowZoom(window, getWindowZoom(window) + ZOOM_STEP);
+      return;
+    }
+    if (key === '-' || code === 'Minus' || code === 'NumpadSubtract') {
+      event.preventDefault();
+      setWindowZoom(window, getWindowZoom(window) - ZOOM_STEP);
+      return;
+    }
+    if (key === '0' || code === 'Digit0' || code === 'Numpad0') {
+      event.preventDefault();
+      setWindowZoom(window, DEFAULT_ZOOM_FACTOR);
+    }
+  });
+}
+
+function getWindowZoom(window) {
+  try {
+    return window.webContents.getZoomFactor();
+  } catch (_error) {
+    return DEFAULT_ZOOM_FACTOR;
+  }
+}
+
+function setWindowZoom(window, factor) {
+  if (!window || window.isDestroyed()) return;
+  const next = Math.round(clampNumber(factor, MIN_ZOOM_FACTOR, MAX_ZOOM_FACTOR) * 100) / 100;
+  window.webContents.setZoomFactor(next);
+}
+
+function clampNumber(value, min, max) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return min;
+  return Math.min(max, Math.max(min, number));
 }
 
 function sendUpdateStatus(status) {

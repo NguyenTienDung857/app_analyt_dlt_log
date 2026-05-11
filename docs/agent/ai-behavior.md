@@ -40,6 +40,8 @@ For mode-specific AI context, keep the compact shape focused on:
 - `time` (`HH:mm:ss` only)
 - `payload`
 
+The visible AI chat modes are currently limited to `Current line` and `All current line`. Do not reintroduce AI `Range` or `Bug` modes unless the user explicitly asks for them.
+
 Avoid reintroducing aggressive payload truncation or priority-based sampling unless the user asks for it. The known large-log use case is around `27000` messages, so low hard caps are usually wrong for this repo.
 
 ## Focus Points In Code

@@ -21,6 +21,7 @@ const PRIMARY_SEARCH_ID = 'primary';
 const DEFAULT_RUNTIME_MODEL = 'gpt-5.3-codex-xhigh';
 const DEFAULT_QUICK_AI_MODEL = DEFAULT_RUNTIME_MODEL;
 const DEFAULT_AI_CHAT_MODE = 'filtered';
+const ALLOWED_AI_CHAT_MODES = new Set(['selection', 'filtered']);
 const DEFAULT_AI_MAX_LOG_LINES = 27000;
 const MAX_AI_CONVERSATION_TURNS = 12;
 const MAX_AI_CONVERSATION_CHARS = 24000;
@@ -124,7 +125,18 @@ const state = {
   lastVirtualCount: -1,
   dropDepth: 0,
   lastDropSignature: '',
-  lastDropAt: 0
+  lastDropAt: 0,
+  dataVersion: 0,
+  filteredVersion: 0,
+  lastTimelineKey: '',
+  lastMinimapKey: '',
+  idToIndex: new Map(),
+  searchCacheVersion: -1,
+  cachedSearchQueries: [],
+  cachedSearchRegexes: [],
+  cachedPagedIndices: null,
+  cachedPagedKey: '',
+  searchDebounceTimers: new Map()
 };
 
 const el = {
@@ -426,10 +438,17 @@ function wireEvents() {
   el.logScrollbar.addEventListener('pointerdown', handleLogScrollbarPointerDown);
   el.focusSearchInput.addEventListener('input', () => {
     el.searchInput.value = el.focusSearchInput.value;
-    state.currentPage = 1;
-    state.levelFilter = null;
-    applyFilters();
-    jumpToFirstSearchMatch(PRIMARY_SEARCH_ID);
+    invalidateSearchCache();
+    const previous = state.searchDebounceTimers.get(PRIMARY_SEARCH_ID);
+    if (previous) clearTimeout(previous);
+    const timer = setTimeout(() => {
+      state.searchDebounceTimers.delete(PRIMARY_SEARCH_ID);
+      state.currentPage = 1;
+      state.levelFilter = null;
+      applyFilters();
+      jumpToFirstSearchMatch(PRIMARY_SEARCH_ID);
+    }, SEARCH_DEBOUNCE_MS);
+    state.searchDebounceTimers.set(PRIMARY_SEARCH_ID, timer);
   });
   el.showFullTime.addEventListener('change', () => {
     state.showFullLogTime = el.showFullTime.checked;
@@ -577,6 +596,15 @@ function closeFocusSearch() {
   state.currentPage = 1;
   state.levelFilter = null;
   applyFilters();
+}
+
+function focusPrimarySearch() {
+  if (el.workspace.classList.contains('log-ai-focus')) {
+    openFocusSearch();
+    return;
+  }
+  el.searchInput.focus();
+  el.searchInput.select();
 }
 
 function handleVirtualScroll() {
@@ -882,7 +910,11 @@ function appendMessages(messages) {
       state.lastTimeMs = state.lastTimeMs === null ? message.timeMs : Math.max(state.lastTimeMs, message.timeMs);
     }
     updateStatsForMessage(message);
+    const messageIndex = state.messages.length;
     state.messages.push(message);
+    if (Number.isFinite(message.id)) {
+      state.idToIndex.set(message.id, messageIndex);
+    }
   }
 
   updateAppendedRangeTimes(startIndex);
@@ -894,8 +926,25 @@ function appendMessages(messages) {
     for (let index = state.filtered.length; index < state.messages.length; index += 1) {
       state.filtered.push(index);
     }
+    bumpFilteredVersion();
   } else {
-    applyFilters(false);
+    appendIncrementalFiltered(startIndex);
+    bumpFilteredVersion();
+    updateSearchMatches();
+    state.currentPage = Math.min(state.currentPage, getTotalPages());
+  }
+}
+
+function appendIncrementalFiltered(startIndex) {
+  const matcher = buildTextMatcher();
+  const activeRange = getActiveFilterRange();
+  const levelFilter = state.levelFilter;
+  for (let index = startIndex; index < state.messages.length; index += 1) {
+    const message = state.messages[index];
+    if (levelFilter && levelFilter.size && !levelFilter.has(message.level)) continue;
+    if (activeRange && !messageWithinFilterRange(message, activeRange)) continue;
+    if (matcher && !matcher(message)) continue;
+    state.filtered.push(index);
   }
 }
 
@@ -1044,6 +1093,7 @@ function fillAxisGaps(values) {
 }
 
 function applyFilters(render = true) {
+  invalidateSearchCache();
   const matcher = buildTextMatcher();
   const activeRange = getActiveFilterRange();
   const levelFilter = state.levelFilter;
@@ -1057,9 +1107,21 @@ function applyFilters(render = true) {
     state.filtered.push(index);
   }
 
+  bumpFilteredVersion();
   updateSearchMatches();
   state.currentPage = Math.min(state.currentPage, getTotalPages());
   if (render) renderAll();
+}
+
+function bumpFilteredVersion() {
+  state.filteredVersion += 1;
+  state.dataVersion += 1;
+  state.cachedPagedIndices = null;
+}
+
+function bumpDataVersion() {
+  state.dataVersion += 1;
+  state.cachedPagedIndices = null;
 }
 
 function buildTextMatcher() {
@@ -1113,9 +1175,27 @@ function hasActiveSearchQueries() {
 }
 
 function getActiveSearchQueries() {
-  return Array.from(new Set(getSearchTerms()
+  ensureSearchCache();
+  return state.cachedSearchQueries;
+}
+
+function getActiveSearchRegexes() {
+  ensureSearchCache();
+  return state.cachedSearchRegexes;
+}
+
+function ensureSearchCache() {
+  if (state.cachedSearchQueries) return;
+  const queries = Array.from(new Set(getSearchTerms()
     .map((term) => getSearchTermValue(term))
     .filter(Boolean)));
+  state.cachedSearchQueries = queries;
+  state.cachedSearchRegexes = queries.map((query) => new RegExp(escapeRegExp(query), 'gi'));
+}
+
+function invalidateSearchCache() {
+  state.cachedSearchQueries = null;
+  state.cachedSearchRegexes = null;
 }
 
 function getSearchTerms() {
@@ -1177,16 +1257,36 @@ function setSearchTermActiveMatch(term, activeMatch) {
   term.activeMatch = activeMatch;
 }
 
+const SEARCH_DEBOUNCE_MS = 140;
+
 function wireSearchInput(input, searchId) {
   if (!input) return;
-  const handleInput = () => {
+  const runFilter = () => {
     state.currentPage = 1;
     state.levelFilter = null;
     applyFilters();
     jumpToFirstSearchMatch(searchId);
   };
-  input.addEventListener('input', handleInput);
-  input.addEventListener('change', handleInput);
+  const debouncedRun = () => {
+    invalidateSearchCache();
+    const previous = state.searchDebounceTimers.get(searchId);
+    if (previous) clearTimeout(previous);
+    const timer = setTimeout(() => {
+      state.searchDebounceTimers.delete(searchId);
+      runFilter();
+    }, SEARCH_DEBOUNCE_MS);
+    state.searchDebounceTimers.set(searchId, timer);
+  };
+  input.addEventListener('input', debouncedRun);
+  input.addEventListener('change', () => {
+    invalidateSearchCache();
+    const previous = state.searchDebounceTimers.get(searchId);
+    if (previous) {
+      clearTimeout(previous);
+      state.searchDebounceTimers.delete(searchId);
+    }
+    runFilter();
+  });
 }
 
 function addSearchTerm(focus = true) {
@@ -1268,7 +1368,9 @@ function updateSearchTermMatches(term) {
   const matches = getSearchTermMatches(term);
   const activeMatch = getSearchTermActiveMatch(term);
   const previousMessageIndex = matches[activeMatch];
-  const selectedMessageIndex = state.messages.findIndex((message) => message.id === state.selectedId);
+  const selectedMessageIndex = state.selectedId !== null && state.idToIndex.has(state.selectedId)
+    ? state.idToIndex.get(state.selectedId)
+    : -1;
   const nextMatches = [];
   for (const messageIndex of state.filtered) {
     const message = state.messages[messageIndex];
@@ -1396,7 +1498,7 @@ function jumpToSearchMatch(searchId, position) {
   setSearchTermActiveMatch(term, index);
   const message = state.messages[matches[index]];
   if (message) {
-    selectMessage(message.id, true);
+    selectMessage(message.id, 'center');
   }
   renderSearchNavigator(searchId);
 }
@@ -1792,10 +1894,10 @@ function handleRowClick(event) {
 function selectMessage(id, ensureVisible) {
   if (!Number.isFinite(id)) return;
   state.selectedId = id;
-  const messageIndex = state.messages.findIndex((message) => message.id === id);
+  const messageIndex = state.idToIndex.has(id) ? state.idToIndex.get(id) : -1;
   syncActiveSearchMatchesToMessage(messageIndex);
   if (ensureVisible) {
-    scrollToMessage(id);
+    scrollToMessage(id, ensureVisible === 'center' ? 'center' : 'nearest');
   }
   renderVirtualRows();
   renderDetail(getSelectedMessage());
@@ -1811,9 +1913,9 @@ function syncActiveSearchMatchesToMessage(messageIndex) {
   }
 }
 
-function scrollToMessage(id) {
+function scrollToMessage(id, align = 'nearest') {
   const pageIndices = getCurrentPageIndices();
-  const messageIndex = state.messages.findIndex((message) => message.id === id);
+  const messageIndex = state.idToIndex.has(id) ? state.idToIndex.get(id) : -1;
   const localIndex = pageIndices.indexOf(messageIndex);
   if (localIndex >= 0) {
     const metrics = buildVirtualMetrics(pageIndices);
@@ -1824,6 +1926,12 @@ function scrollToMessage(id) {
     const visibleTop = currentScroll + MIN_ROW_HEIGHT;
     const visibleBottom = currentScroll + viewportHeight - MIN_ROW_HEIGHT;
     const maxScroll = Math.max(0, metrics.totalHeight + VIRTUAL_SCROLL_END_PADDING - viewportHeight);
+    if (align === 'center') {
+      const rowHeight = Math.max(MIN_ROW_HEIGHT, rowBottom - rowTop);
+      const centeredScroll = rowTop + (rowHeight / 2) - (viewportHeight / 2);
+      el.virtualScroll.scrollTop = clampNumber(centeredScroll, 0, maxScroll);
+      return;
+    }
     if (rowTop < visibleTop) {
       el.virtualScroll.scrollTop = clampNumber(rowTop - MIN_ROW_HEIGHT, 0, maxScroll);
     } else if (rowBottom > visibleBottom) {
@@ -1837,15 +1945,29 @@ function scrollToMessage(id) {
     state.currentPage = Math.floor(filteredPosition / Number(state.pageSize)) + 1;
     renderPagination();
     const metrics = buildVirtualMetrics(getCurrentPageIndices());
-    el.virtualScroll.scrollTop = metrics.offsets[filteredPosition % Number(state.pageSize)] || 0;
+    const localPageIndex = filteredPosition % Number(state.pageSize);
+    const rowTop = metrics.offsets[localPageIndex] || 0;
+    const rowBottom = metrics.offsets[localPageIndex + 1] || rowTop + MIN_ROW_HEIGHT;
+    const viewportHeight = el.virtualScroll.clientHeight || 0;
+    const maxScroll = Math.max(0, metrics.totalHeight + VIRTUAL_SCROLL_END_PADDING - viewportHeight);
+    if (align === 'center') {
+      const rowHeight = Math.max(MIN_ROW_HEIGHT, rowBottom - rowTop);
+      el.virtualScroll.scrollTop = clampNumber(rowTop + (rowHeight / 2) - (viewportHeight / 2), 0, maxScroll);
+    } else {
+      el.virtualScroll.scrollTop = clampNumber(rowTop, 0, maxScroll);
+    }
   }
 }
 
-function renderTimeline() {
+function renderTimeline(force = false) {
   const canvas = el.timeline;
+  const width = Math.max(1, canvas.clientWidth);
+  const height = Math.max(1, canvas.clientHeight);
+  const cacheKey = `${state.filteredVersion}|${state.aiHighlights.size}|${width}x${height}`;
+  if (!force && state.lastTimelineKey === cacheKey) return;
+  state.lastTimelineKey = cacheKey;
+
   const ctx = setupCanvas(canvas);
-  const width = canvas.clientWidth;
-  const height = canvas.clientHeight;
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = 'rgba(255,255,255,0.035)';
   ctx.fillRect(0, 0, width, height);
@@ -1947,23 +2069,50 @@ function drawMinuteTicks(ctx, min, max, width, height, top, bottom) {
   ctx.restore();
 }
 
-function renderMinimap() {
+function renderMinimap(force = false) {
   const canvas = el.minimap;
+  const width = Math.max(1, canvas.clientWidth || 18);
+  const height = Math.max(1, canvas.clientHeight || 1);
+  const cacheKey = `${state.dataVersion}|${state.aiHighlights.size}|${width}x${height}`;
+  if (!force && state.lastMinimapKey === cacheKey) return;
+  state.lastMinimapKey = cacheKey;
+
   const ctx = setupCanvas(canvas);
-  const width = canvas.clientWidth || 18;
-  const height = canvas.clientHeight || 1;
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = 'rgba(255,255,255,0.04)';
   ctx.fillRect(0, 0, width, height);
 
   if (!state.messages.length) return;
-  for (const message of state.messages) {
-    const y = Math.min(height - 1, Math.floor((message.id / Math.max(1, state.messages.length - 1)) * height));
-    if (state.aiHighlights.has(message.id)) ctx.fillStyle = '#00b8a9';
-    else if (message.level === 'Fatal' || message.level === 'Error') ctx.fillStyle = '#ff5c6c';
-    else if (message.level === 'Warn') ctx.fillStyle = '#f7c948';
+
+  // Aggregate by pixel row: 0=none, 1=warn, 2=error, 3=ai-hit (priority order).
+  const rows = new Uint8Array(height);
+  const total = Math.max(1, state.messages.length - 1);
+  const messages = state.messages;
+  const aiHighlights = state.aiHighlights;
+  for (let i = 0; i < messages.length; i += 1) {
+    const message = messages[i];
+    let level = 0;
+    if (aiHighlights.has(message.id)) level = 3;
+    else if (message.level === 'Fatal' || message.level === 'Error') level = 2;
+    else if (message.level === 'Warn') level = 1;
     else continue;
-    ctx.fillRect(0, y, width, 2);
+    const y = Math.min(height - 1, Math.floor((message.id / total) * height));
+    if (level > rows[y]) rows[y] = level;
+  }
+
+  const COLORS = ['', '#f7c948', '#ff5c6c', '#00b8a9'];
+  let runStart = -1;
+  let runLevel = 0;
+  for (let y = 0; y <= height; y += 1) {
+    const value = y < height ? rows[y] : 0;
+    if (value !== runLevel) {
+      if (runLevel && runStart >= 0) {
+        ctx.fillStyle = COLORS[runLevel];
+        ctx.fillRect(0, runStart, width, Math.max(2, y - runStart));
+      }
+      runLevel = value;
+      runStart = value ? y : -1;
+    }
   }
 }
 
@@ -2360,9 +2509,9 @@ function buildUserGuideContent() {
     '- In `Log AI Focus`, click the small `Search` button above the table for quick search.',
     '',
     '## 4. AI Diagnostic Report',
-    '- Choose a mode beside `Send`: `Current line`, `Range`, `All current line`, or `Bug`.',
-    '- `Range` shows a two-handle time slider for the log window sent to AI; use `Switch` to change the range panel to ID mode.',
-    '- `Potential Bug` sends the full log up to `Max AI messages`.',
+    '- Choose a mode beside `Send`: `Current line` or `All current line`.',
+    '- `Current line` sends the selected row with nearby context.',
+    '- `All current line` sends the rows currently visible after Search / Filter.',
     '- When `Send` is pressed, the button stays locked until AI returns a response or an error.',
     '- The app sends only message id, `HH:mm:ss` time, payload, and `system_space` documentation to reduce tokens.',
     '- The default AI context limit is 27,000 messages. Change `Max AI messages` in `AI / RAG Config` if a provider needs a lower cap.',
@@ -2384,7 +2533,7 @@ function buildUserGuideContent() {
     '',
     '## 8. Notes',
     '- Non-verbose DLT requires FIBEX/ARXML mapping for complete payload decoding.',
-    '- If whole-log AI analysis is too slow, use search, ID Range, or AI Range to reduce context.'
+    '- If AI analysis is too broad, use search or ID Range to reduce context.'
   ].join('\n');
 }
 
@@ -2423,7 +2572,7 @@ async function runAutoAiScan() {
     setAiStatus('Auto-scan did not find enough candidate messages to analyze.', true);
     renderAiObject('Auto Scan', {
       summary: 'No Error/Fatal/Warn or suspicious keywords were found in the log.',
-      recommended_action: 'Use Search or manually select a time/ID range.'
+      recommended_action: 'Use Search / Filter or select a row before sending AI.'
     });
     return;
   }
@@ -2468,7 +2617,7 @@ async function analyzeSelected() {
 
 async function sendAiChat(mode) {
   if (state.aiSending) return;
-  mode = mode === 'auto' ? state.aiChatMode : (mode || state.aiChatMode);
+  mode = normalizeAiChatMode(mode === 'auto' ? state.aiChatMode : (mode || state.aiChatMode));
   const typedQuestion = el.aiChatInput.value.trim();
   const question = typedQuestion || defaultChatQuestion(mode);
   if (!question) {
@@ -2516,7 +2665,7 @@ async function sendAiChat(mode) {
 
     const resultText = String(response.result || '').trim();
     if (!resultText) {
-      throw new Error('AI returned an empty response. The chat is not complete; try again or reduce the range if the model is overloaded.');
+      throw new Error('AI returned an empty response. The chat is not complete; try again or reduce the current filter if the model is overloaded.');
     }
 
     const responseMeta = {
@@ -2545,14 +2694,14 @@ function resetAiChatConversation() {
   el.aiChatLog.innerHTML = '';
   appendChatBubble(
     'assistant',
-    'Select a mode, choose a time range if needed, then press Send.',
+    'Select a mode, then press Send.',
     null,
     null,
     null,
     { scroll: 'none' }
   );
   el.aiChatInput.value = '';
-  setAiStatus('New AI chat started. Log context, range, prompt, and model are unchanged.', false);
+  setAiStatus('New AI chat started. Log context, prompt, and model are unchanged.', false);
   el.aiChatInput.focus();
 }
 
@@ -2687,10 +2836,7 @@ function toQuickAiMessage(message, targetId) {
 
 function getAiChatMaxLogLines(mode, contextCount) {
   const configuredLimit = Math.max(1, Number(state.aiConfig?.maxLogLines || DEFAULT_AI_MAX_LOG_LINES));
-  if (mode === 'errors' || mode === 'filtered') {
-    return Math.min(Math.max(1, Number(contextCount || 0)), configuredLimit);
-  }
-  return configuredLimit;
+  return Math.min(Math.max(1, Number(contextCount || 0)), configuredLimit);
 }
 
 function limitAiContextMessagesSequential(messages, limit) {
@@ -2776,68 +2922,34 @@ function updateChatRangeInfo() {
     el.aiChatRangeInfo.textContent = '0 message';
     return;
   }
-  if (state.aiChatMode === 'selection') {
+  const mode = normalizeAiChatMode(state.aiChatMode);
+  if (mode === 'selection') {
     const selected = getSelectedMessage();
     el.aiChatRangeInfo.textContent = selected
       ? `Row #${selected.id} with nearby messages`
       : 'No row selected';
     return;
   }
-  if (state.aiChatMode === 'errors') {
-    const limit = getAiChatMaxLogLines('errors', state.messages.length);
-    el.aiChatRangeInfo.textContent = limit < state.messages.length
-      ? `${formatNumber(state.messages.length)} full-log messages; AI sends ${formatNumber(limit)} selected payloads`
-      : `${formatNumber(state.messages.length)} full-log messages`;
-    return;
-  }
-  if (state.aiChatMode === 'filtered') {
-    const limit = getAiChatMaxLogLines('filtered', state.filtered.length);
-    el.aiChatRangeInfo.textContent = limit < state.filtered.length
-      ? `${formatNumber(state.filtered.length)} filtered messages; AI sends ${formatNumber(limit)} selected payloads`
-      : `${formatNumber(state.filtered.length)} messages after current filters`;
-    return;
-  }
-  const range = resolveChatRange();
-  if (!range) {
-    el.aiChatRangeInfo.textContent = 'No range selected';
-    return;
-  }
-  const count = range.unit === 'id'
-    ? countMessagesInIdRange(range.fromId, range.toId)
-    : countMessagesInRange(range.fromMs, range.toMs);
-  el.aiChatRangeInfo.textContent = `${formatNumber(count)} messages in selected range`;
+  const limit = getAiChatMaxLogLines('filtered', state.filtered.length);
+  el.aiChatRangeInfo.textContent = limit < state.filtered.length
+    ? `${formatNumber(state.filtered.length)} filtered messages; AI sends ${formatNumber(limit)} payloads`
+    : `${formatNumber(state.filtered.length)} messages after current filters`;
 }
 
 function buildChatContextMessages(mode) {
   if (!state.messages.length) return [];
-  mode = mode || state.aiChatMode;
-
-  if (mode === 'range') {
-    const chatRange = resolveChatRange();
-    if (chatRange) {
-      return chatRange.unit === 'id'
-        ? messagesInIdRange(chatRange.fromId, chatRange.toId)
-        : messagesInRange(chatRange.fromMs, chatRange.toMs);
-    }
-    return [];
-  }
+  mode = normalizeAiChatMode(mode || state.aiChatMode);
 
   if (mode === 'selection') {
     const selected = getSelectedMessage();
-    if (selected) {
-      return buildCurrentLineContext(selected);
-    }
-  }
-
-  if (mode === 'errors') {
-    return state.messages.slice();
+    return selected ? buildCurrentLineContext(selected) : [];
   }
 
   if (mode === 'filtered') {
     return state.filtered.map((index) => state.messages[index]).filter(Boolean);
   }
 
-  return state.messages.slice(0, Math.min(1200, state.messages.length));
+  return [];
 }
 
 function buildCurrentLineContext(selected) {
@@ -2845,7 +2957,7 @@ function buildCurrentLineContext(selected) {
 }
 
 function buildNeighborContextByIndex(targetId, beforeCount, afterCount) {
-  const targetIndex = state.messages.findIndex((message) => message.id === targetId);
+  const targetIndex = state.idToIndex.has(targetId) ? state.idToIndex.get(targetId) : -1;
   if (targetIndex < 0) return [];
   const start = Math.max(0, targetIndex - beforeCount);
   const end = Math.min(state.messages.length, targetIndex + afterCount + 1);
@@ -2893,13 +3005,15 @@ function withHiddenAiInstructions(question, mode) {
   ].filter(Boolean).join('\n');
 }
 
+function normalizeAiChatMode(mode) {
+  const value = String(mode || '').trim();
+  return ALLOWED_AI_CHAT_MODES.has(value) ? value : DEFAULT_AI_CHAT_MODE;
+}
+
 function setAiChatMode(mode) {
-  state.aiChatMode = mode || DEFAULT_AI_CHAT_MODE;
+  state.aiChatMode = normalizeAiChatMode(mode);
   if (el.aiChatUseRange) {
-    el.aiChatUseRange.checked = state.aiChatMode === 'range';
-  }
-  if (state.aiChatMode === 'range' && !Number.isFinite(state.aiRange.from)) {
-    resetAiRangeToFull(false);
+    el.aiChatUseRange.checked = false;
   }
   updateAiModeUi();
   updateChatRangeInfo();
@@ -2974,25 +3088,17 @@ function handleAiRangeInput(_event, edge) {
   if (edge === 'from' && from > to) to = from;
   if (edge === 'to' && to < from) from = to;
   setAiRange(from, to, true);
-  setAiChatMode('range');
+  setAiChatMode(DEFAULT_AI_CHAT_MODE);
 }
 
 function resetAiRangeToFull(focus = true) {
   if (!resetRangeToFull('ai')) return;
-  setAiChatMode('range');
+  setAiChatMode(DEFAULT_AI_CHAT_MODE);
   if (focus) el.aiChatInput.focus();
 }
 
 function selectRangeForAi() {
-  const range = selectedTimeRange();
-  if (!range) {
-    setAiStatus('No row is selected for AI range.', true);
-    return;
-  }
-  state.aiRange.unit = 'time';
-  clearRangeBounds('ai');
-  setAiRange(range.fromMs, range.toMs, true);
-  setAiChatMode('range');
+  setAiStatus('AI Range mode has been removed. Use Search / Filter or Current line before sending AI.', true);
 }
 
 function prepareRangePrompt(prompt) {
@@ -3013,7 +3119,7 @@ function applyAiRangeValues() {
 
 function toggleAiRangeUnit() {
   toggleRangeUnit('ai');
-  setAiChatMode('range');
+  setAiChatMode(DEFAULT_AI_CHAT_MODE);
 }
 
 function syncRangeControls(kind) {
@@ -3478,12 +3584,12 @@ function enrichAiResult(result, requestPayload) {
   if (isSparseFallbackField(next.recommended_action, 'recommendation')) {
     next.recommended_action = ids.length
       ? `Inspect messages #${ids.slice(0, 12).join(', ')} on the timeline, expand the analysis window to 2000-5000 ms if the issue spans longer, then compare with ECU/FIBEX/ARXML documentation.`
-      : 'Expand the time/ID range around the suspicious area, check consecutive warnings/errors, and load FIBEX/ARXML if the log is non-verbose.';
+      : 'Narrow the visible filter around the suspicious area, check consecutive warnings/errors, and load FIBEX/ARXML if the log is non-verbose.';
   }
 
   if (!Array.isArray(next.next_steps) || !next.next_steps.length) {
     next.next_steps = [
-      'Expand context around the issue and rerun AI range analysis.',
+      'Expand context around the issue and rerun AI analysis with the current filter.',
       'Inspect highlighted messages on the timeline.',
       'Load FIBEX/ARXML if non-verbose payloads are not decoded.'
     ];
@@ -3776,9 +3882,28 @@ function handleMinimapClick(event) {
 function handleKeyboard(event) {
   const tag = document.activeElement?.tagName;
   const isTyping = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
-  if (!isTyping && event.key.toLowerCase() === 'f') {
+  const isCommandKey = event.ctrlKey || event.metaKey;
+  const key = String(event.key || '').toLowerCase();
+  if (isCommandKey && !event.altKey) {
+    if (key === 'o') {
+      event.preventDefault();
+      void openFromDialog();
+      return;
+    }
+    if (key === 'f') {
+      event.preventDefault();
+      focusPrimarySearch();
+      return;
+    }
+    if (!isTyping && key === 'l') {
+      event.preventDefault();
+      toggleAiFocus();
+      return;
+    }
+  }
+  if (!isTyping && key === 'f') {
     event.preventDefault();
-    el.searchInput.focus();
+    focusPrimarySearch();
     return;
   }
   if (isTyping) return;
@@ -3792,7 +3917,9 @@ function handleKeyboard(event) {
 }
 
 function moveSelection(delta) {
-  const currentMessageIndex = state.messages.findIndex((message) => message.id === state.selectedId);
+  const currentMessageIndex = state.selectedId !== null && state.idToIndex.has(state.selectedId)
+    ? state.idToIndex.get(state.selectedId)
+    : -1;
   const filteredPos = state.filtered.indexOf(currentMessageIndex);
   const nextPos = Math.min(state.filtered.length - 1, Math.max(0, filteredPos + delta));
   const message = state.messages[state.filtered[nextPos]];
@@ -3804,8 +3931,14 @@ function getCurrentPageIndices() {
     return state.filtered;
   }
   const size = Number(state.pageSize);
+  const key = `${state.filteredVersion}|${state.currentPage}|${size}`;
+  if (state.cachedPagedIndices && state.cachedPagedKey === key) {
+    return state.cachedPagedIndices;
+  }
   const start = (state.currentPage - 1) * size;
-  return state.filtered.slice(start, start + size);
+  state.cachedPagedIndices = state.filtered.slice(start, start + size);
+  state.cachedPagedKey = key;
+  return state.cachedPagedIndices;
 }
 
 function getTotalPages() {
@@ -3815,7 +3948,9 @@ function getTotalPages() {
 
 function getSelectedMessage() {
   if (state.selectedId === null) return null;
-  return state.messages.find((message) => message.id === state.selectedId) || null;
+  const index = state.idToIndex.get(state.selectedId);
+  if (index !== undefined) return state.messages[index] || null;
+  return null;
 }
 
 function collectStats() {
@@ -3841,7 +3976,6 @@ function collectAiStats(mode, contextMessages) {
   for (const message of state.messages) {
     levels[message.level] = (levels[message.level] || 0) + 1;
   }
-  const range = mode === 'range' ? resolveChatRange() : null;
   const bounds = getRangeBounds('time');
   return {
     mode,
@@ -3856,11 +3990,7 @@ function collectAiStats(mode, contextMessages) {
     timeEnd: state.lastTimeMs !== null ? formatTimeLabel(state.lastTimeMs) : '',
     timeSpanMs: bounds ? bounds.max - bounds.min : 0,
     selectedId: state.selectedId,
-    selectedRange: range ? {
-      unit: range.unit,
-      from: range.unit === 'id' ? formatRangeValue('id', range.fromId) : formatRangeClockLabel(range.fromMs),
-      to: range.unit === 'id' ? formatRangeValue('id', range.toId) : formatRangeClockLabel(range.toMs)
-    } : null,
+    selectedRange: null,
     levels
   };
 }
@@ -3883,6 +4013,9 @@ function clearData() {
   state.messages = [];
   state.filtered = [];
   state.files = [];
+  state.idToIndex.clear();
+  bumpFilteredVersion();
+  invalidateSearchCache();
   state.stats = createEmptyStats();
   state.rangeBounds = createEmptyRangeBounds();
   state.rangeAxis = createEmptyRangeAxis();
@@ -3942,24 +4075,32 @@ function setupCanvas(canvas) {
 }
 
 function highlightSearch(value) {
-  const text = String(value ?? '');
+  const text = value == null ? '' : String(value);
+  if (!text) return '';
   const queries = getActiveSearchQueries();
   if (!queries.length) return escapeHtml(text);
 
+  const regexes = getActiveSearchRegexes();
   const ranges = [];
   let hasCompactOnlyMatch = false;
-  for (const query of queries) {
-    const exactRegex = new RegExp(escapeRegExp(query), 'gi');
+  let compactText = null;
+  for (let qi = 0; qi < queries.length; qi += 1) {
+    const exactRegex = regexes[qi];
+    exactRegex.lastIndex = 0;
     let hasExactMatch = false;
     let match;
     while ((match = exactRegex.exec(text)) !== null) {
       hasExactMatch = true;
       ranges.push([match.index, match.index + match[0].length]);
+      if (match[0].length === 0) exactRegex.lastIndex += 1;
     }
     if (!hasExactMatch) {
-      const compactNeedle = compactSearchText(query);
-      if (compactNeedle && compactSearchText(text).includes(compactNeedle)) {
-        hasCompactOnlyMatch = true;
+      const compactNeedle = compactSearchText(queries[qi]);
+      if (compactNeedle) {
+        if (compactText === null) compactText = compactSearchText(text);
+        if (compactText.includes(compactNeedle)) {
+          hasCompactOnlyMatch = true;
+        }
       }
     }
   }
@@ -3997,13 +4138,19 @@ function renderHighlightedRanges(text, ranges) {
   return html;
 }
 
+const HTML_ESCAPE_MAP = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;'
+};
+const HTML_ESCAPE_REGEX = /[&<>"']/g;
+
 function escapeHtml(value) {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+  const text = value == null ? '' : String(value);
+  if (!text) return '';
+  return text.replace(HTML_ESCAPE_REGEX, (ch) => HTML_ESCAPE_MAP[ch]);
 }
 
 function escapeRegExp(value) {

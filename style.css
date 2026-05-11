@@ -245,7 +245,7 @@ textarea {
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
-  min-width: 180px;
+  min-width: 220px;
   border: 1px solid var(--line-strong);
   border-radius: 12px;
   background: var(--panel-strong);
@@ -284,6 +284,43 @@ textarea {
   height: 1px;
   background: var(--line);
   margin: 4px 0;
+}
+
+.help-shortcuts {
+  display: grid;
+  gap: 6px;
+  padding: 7px 8px 8px;
+}
+
+.help-shortcut-title {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.help-shortcut {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  color: var(--text);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.help-shortcut kbd {
+  min-width: 56px;
+  padding: 2px 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
 }
 
 /* ── Update bar (checking / error only) ─────────────── */

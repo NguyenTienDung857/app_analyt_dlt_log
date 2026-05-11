@@ -1,6 +1,6 @@
 # BLTN-Analysis Log User Guide (English)
 
-This app is a desktop log viewer for Built-in Cam ECU logs with an AI diagnostic workspace. It is designed for fast timeline scanning plus focused AI analysis on a selected row, a time window, or the current filtered view.
+This app is a desktop log viewer for Built-in Cam ECU logs with an AI diagnostic workspace. It is designed for fast timeline scanning plus focused AI analysis on a selected row or the current filtered view.
 
 ## 1. Open Logs
 
@@ -110,7 +110,7 @@ This filter affects:
 
 - What you see in the log table
 - What is exported by `Export CSV`
-- What the AI `Filtered` mode uses
+- What the AI `All current line` mode uses
 
 ### 6.4 Export CSV
 
@@ -148,25 +148,16 @@ While AI is running, `Send` stays locked until the response returns or errors.
 Available modes are:
 
 - `Current line`: analyze the selected row with nearby context
-- `Range`: analyze only the window defined by the AI time slider
-- `Filtered`: analyze the currently filtered view (context-reduced)
-- `Bug`: whole-log style prompt focused on finding the most important suspicious issue
+- `All current line`: analyze the currently filtered view (context-reduced)
 
-### 8.3 AI Range Slider (Mode: Range)
-
-When you select `Range`, you can use a two-handle `HH:mm:ss` slider to choose:
-
-- `From` and `To` boundaries
-Use `Full Log` to reset the AI range back to the full log bounds.
-
-### 8.4 Runtime Model Selection
+### 8.3 Runtime Model Selection
 
 Use the model dropdown near the report header to pick the model per request:
 
 - `Config Default` uses the model set in `AI / RAG Config`
 - Other options run the selected model for this request only
 
-### 8.5 Prompt Guidance
+### 8.4 Prompt Guidance
 
 Click `Prompt` to open the guidance panel and add optional instructions, such as:
 
@@ -176,15 +167,15 @@ Click `Prompt` to open the guidance panel and add optional instructions, such as
 
 Guidance is stored locally and applied to subsequent requests.
 
-### 8.6 What the App Sends to AI (Important)
+### 8.5 What the App Sends to AI (Important)
 
 To keep token usage controlled, the app sends a reduced context view:
 
-- Log context is primarily message id, `HH:mm:ss` time, and payload for selected rows/windows
+- Log context is primarily message id, `HH:mm:ss` time, and payload for the selected row context or current filtered view
 - The default AI context limit is 27,000 messages and can be changed in `AI / RAG Config`
 - Relevant ECU docs are retrieved locally (RAG) and attached as snippets
 
-If you need extra evidence, expand your range window or widen the visible filter context and resend.
+If you need extra evidence, widen the visible filter context and resend.
 
 ## 9. AI / RAG Config (Locked Panel)
 
@@ -200,7 +191,7 @@ It contains:
 - Context window size (ms)
 - Max AI messages
 
-After enabling `Suggest context after opening logs`, the app selects a bug-focused mode after parsing, but it will not run AI automatically; you still press `Send`.
+After enabling `Suggest context after opening logs`, the app selects `All current line` after parsing, but it will not run AI automatically; you still press `Send`.
 
 ## 10. Download Guide
 
@@ -264,5 +255,5 @@ gh release create v1.0.1 dist\*.exe dist\*.blockmap dist\latest.yml --title "v1.
 ## 13. Troubleshooting
 
 - If AI returns an error, verify Base URL / API key / model in `AI / RAG Config`.
-- If results are too broad, narrow the view first using search and the ID Range filter, then use AI `Range` or `Filtered`.
+- If results are too broad, narrow the view first using search and the ID Range filter, then use AI `All current line`.
 - If payloads are non-verbose and not human-readable, ingest FIBEX/ARXML docs and retry AI analysis.

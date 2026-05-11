@@ -28,6 +28,17 @@
             <button class="help-menu-item" id="btn-guide">Download Guide</button>
             <div class="help-menu-divider"></div>
             <button class="help-menu-item" id="btn-check-update">Check for Updates</button>
+            <div class="help-menu-divider"></div>
+            <div class="help-shortcuts">
+              <div class="help-shortcut-title">Shortcuts</div>
+              <div class="help-shortcut"><span>Open log</span><kbd>Ctrl O</kbd></div>
+              <div class="help-shortcut"><span>Search</span><kbd>Ctrl F</kbd></div>
+              <div class="help-shortcut"><span>AI focus</span><kbd>Ctrl L</kbd></div>
+              <div class="help-shortcut"><span>Send chat</span><kbd>Ctrl Enter</kbd></div>
+              <div class="help-shortcut"><span>Zoom in</span><kbd>Ctrl +</kbd></div>
+              <div class="help-shortcut"><span>Zoom out</span><kbd>Ctrl -</kbd></div>
+              <div class="help-shortcut"><span>Reset zoom</span><kbd>Ctrl 0</kbd></div>
+            </div>
           </div>
         </div>
       </div>
@@ -309,7 +320,7 @@
             <div id="ai-report" class="ai-report ai-chat-log">
               <div class="chat-bubble assistant">
                 <strong>AI</strong>
-                <p>Select a mode, choose a time range if needed, then press Send.</p>
+                <p>Select a mode, then press Send.</p>
               </div>
             </div>
             <div id="ai-prompt-panel" class="ai-prompt-panel hidden">
@@ -321,9 +332,7 @@
               <div class="ai-chat-actions">
                 <select id="ai-chat-mode-select" class="select ai-mode-select">
                   <option value="selection">Current line</option>
-                  <option value="range">Range</option>
                   <option value="filtered" selected>All current line</option>
-                  <option value="errors">Bug</option>
                 </select>
                 <button id="btn-ai-chat-new" class="btn" type="button" title="Start a new AI chat">New</button>
                 <button id="btn-ai-chat-send" class="btn primary" type="button">Send</button>

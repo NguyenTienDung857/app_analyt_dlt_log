@@ -144,9 +144,7 @@ Dùng `Log AI Focus` để mở panel AI bên phải.
 1. Nhập câu hỏi vào ô chat.
 2. Chọn mode:
    - `Current line`: phân tích dòng đang chọn + context gần đó
-   - `Range`: phân tích chỉ khoảng A-B của slider AI (Time/ID)
-   - `Filtered`: phân tích view đang filter (context được rút gọn)
-   - `Bug`: prompt kiểu whole-log để tìm vấn đề quan trọng nhất
+   - `All current line`: phân tích view đang filter (context được rút gọn)
 3. Bấm `Send` (hoặc `Ctrl + Enter`).
 
 Tính năng liên quan:
